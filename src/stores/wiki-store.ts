@@ -17,11 +17,12 @@ export interface ReasoningConfig {
 }
 
 interface LlmConfig {
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli"
+  provider: "openai" | "anthropic" | "google" | "azure" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli"
   apiKey: string
   model: string
   ollamaUrl: string
   customEndpoint: string
+  azureApiVersion?: string
   maxContextSize: number // max context window in characters
   apiMode?: CustomApiMode
   reasoning?: ReasoningConfig
@@ -184,6 +185,7 @@ interface MultimodalConfig {
   model: string
   ollamaUrl: string
   customEndpoint: string
+  azureApiVersion?: string
   apiMode?: CustomApiMode
   /** Max parallel caption requests during ingest. >=1. */
   concurrency: number
@@ -228,6 +230,7 @@ export interface ProviderOverride {
   apiKey?: string
   model?: string
   baseUrl?: string           // customEndpoint for custom presets, ollamaUrl for ollama
+  azureApiVersion?: string
   apiMode?: CustomApiMode
   maxContextSize?: number
   reasoning?: ReasoningConfig
@@ -308,6 +311,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     model: "",
     ollamaUrl: "http://localhost:11434",
     customEndpoint: "",
+    azureApiVersion: "2024-10-21",
     reasoning: { mode: "auto" },
   },
   providerConfigs: {},
@@ -351,6 +355,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     model: "",
     ollamaUrl: "http://localhost:11434",
     customEndpoint: "",
+    azureApiVersion: "2024-10-21",
     apiMode: "chat_completions",
     concurrency: 4,
   },

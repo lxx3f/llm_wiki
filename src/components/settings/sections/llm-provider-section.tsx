@@ -9,6 +9,7 @@ import { LLM_PRESETS, type LlmPreset } from "../llm-presets"
 import { ContextSizeSelector } from "../context-size-selector"
 import { resolveConfig } from "../preset-resolver"
 import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
+import { AZURE_OPENAI_API_VERSION } from "@/lib/azure-openai"
 
 export function LlmProviderSection() {
   const { t } = useTranslation()
@@ -117,9 +118,10 @@ function PresetRow({
   const apiKey = ov.apiKey ?? ""
   const apiMode = ov.apiMode ?? preset.apiMode ?? "chat_completions"
   const baseUrl = ov.baseUrl ?? preset.baseUrl ?? ""
+  const azureApiVersion = ov.azureApiVersion ?? preset.azureApiVersion ?? AZURE_OPENAI_API_VERSION
   const context = ov.maxContextSize ?? preset.suggestedContextSize ?? 131072
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
-  const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model
+  const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model || !!ov.azureApiVersion
   // Local CLI providers authenticate via their own existing login state
   // (inherited by the spawned subprocess), so no API key field is shown.
   // Ollama ditto for its local-only model.
@@ -240,13 +242,27 @@ function PresetRow({
             </div>
           )}
 
-          {(preset.provider === "custom" || preset.provider === "ollama") && (
+          {(preset.provider === "custom" || preset.provider === "ollama" || preset.provider === "azure") && (
             <EndpointField
               value={baseUrl}
-              mode={apiMode}
+              mode={preset.provider === "azure" ? "azure" : apiMode}
               placeholder={preset.baseUrl ?? "https://your-api.example.com/v1"}
               onChange={(v) => onChange({ baseUrl: v })}
             />
+          )}
+
+          {preset.provider === "azure" && (
+            <div className="space-y-2">
+              <Label>Azure API version</Label>
+              <Input
+                value={azureApiVersion}
+                onChange={(e) => onChange({ azureApiVersion: e.target.value })}
+                placeholder="2024-10-21"
+              />
+              <p className="text-xs text-muted-foreground">
+                Sent as the Azure OpenAI <code className="font-mono">api-version</code> query parameter.
+              </p>
+            </div>
           )}
 
           {preset.provider === "claude-code" && <ClaudeCliStatusPill />}
@@ -269,7 +285,11 @@ function PresetRow({
           )}
 
           <div className="space-y-2">
-            <Label>{t("settings.model")}</Label>
+            <Label>
+              {preset.provider === "azure"
+                ? t("settings.sections.llm.deploymentName", "Deployment name")
+                : t("settings.model")}
+            </Label>
             <ModelPicker
               value={model}
               suggestions={preset.suggestedModels ?? []}
@@ -367,7 +387,7 @@ function ReasoningControls({
 
 interface EndpointFieldProps {
   value: string
-  mode: "chat_completions" | "anthropic_messages"
+  mode: "chat_completions" | "anthropic_messages" | "azure"
   placeholder: string
   onChange: (value: string) => void
 }

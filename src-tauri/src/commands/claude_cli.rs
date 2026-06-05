@@ -28,6 +28,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use super::cli_resolver::find_cli_command;
+
 /// Shared state holding running `claude` child processes keyed by the
 /// frontend-generated stream id. Registered via .manage() in lib.rs.
 #[derive(Default)]
@@ -113,69 +115,18 @@ fn claude_content_blocks(content: &ClaudeContent) -> Vec<serde_json::Value> {
     }
 }
 
-/// Spawn the user's login shell to retrieve the full PATH (which
-/// includes nvm/vfox/volta/fnm/… directories that macOS GUI apps
-/// don't inherit from launchd). Returns `None` on any failure so the
-/// caller can fall back to the process-level PATH.
-#[cfg(not(windows))]
-fn shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    // `-ilc` = interactive + login so both profile and rc files run,
-    // picking up version-manager init scripts. We print a unique
-    // marker so we can find our line even if the shell prints motd /
-    // banners to stdout.
-    let output = std::process::Command::new(&shell)
-        .args(["-ilc", r#"printf '\x1ePATH=%s\x1e\n' "$PATH""#])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        // Look for the marker-delimited PATH value.
-        if let Some(rest) = line.strip_prefix('\x1e') {
-            if let Some(val) = rest.strip_suffix('\x1e') {
-                if let Some(path) = val.strip_prefix("PATH=") {
-                    if !path.is_empty() {
-                        return Some(path.to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
+async fn find_claude_command() -> Result<PathBuf, String> {
+    find_cli_command("claude", &["claude.cmd", "claude.exe"]).await
 }
 
-fn find_claude_command() -> Result<PathBuf, String> {
+fn suppress_windows_console(_cmd: &mut Command) {
     #[cfg(windows)]
     {
-        if let Ok(path) = which::which("claude.cmd") {
-            return Ok(path);
-        }
-        if let Ok(path) = which::which("claude.exe") {
-            return Ok(path);
-        }
-    }
+        use std::os::windows::process::CommandExt;
 
-    if let Ok(path) = which::which("claude") {
-        return Ok(path);
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        _cmd.creation_flags(CREATE_NO_WINDOW);
     }
-
-    // macOS / Linux GUI apps inherit a minimal PATH from launchd /
-    // the display manager. Ask the user's login shell for its full
-    // PATH which includes version-manager directories (nvm, vfox,
-    // volta, fnm, …) and search that instead.
-    #[cfg(not(windows))]
-    if let Some(full_path) = shell_path() {
-        // which::which_in searches the given PATH string.
-        if let Ok(path) = which::which_in("claude", Some(&full_path), ".") {
-            return Ok(path);
-        }
-    }
-
-    Err("`claude` not found on PATH".to_string())
 }
 
 /// Locate `claude` on PATH and confirm it's runnable by calling
@@ -183,7 +134,7 @@ fn find_claude_command() -> Result<PathBuf, String> {
 /// mount of the settings panel.
 #[tauri::command]
 pub async fn claude_cli_detect() -> Result<DetectResult, String> {
-    let path = match find_claude_command() {
+    let path = match find_claude_command().await {
         Ok(p) => p,
         Err(error) => {
             return Ok(DetectResult {
@@ -197,11 +148,9 @@ pub async fn claude_cli_detect() -> Result<DetectResult, String> {
 
     let path_str = path.to_string_lossy().to_string();
 
-    let output = tokio::time::timeout(
-        Duration::from_secs(3),
-        Command::new(&path).arg("--version").output(),
-    )
-    .await;
+    let mut cmd = Command::new(&path);
+    suppress_windows_console(&mut cmd);
+    let output = tokio::time::timeout(Duration::from_secs(3), cmd.arg("--version").output()).await;
 
     match output {
         Ok(Ok(out)) if out.status.success() => {
@@ -301,8 +250,9 @@ pub async fn claude_cli_spawn(
         })
         .collect();
 
-    let claude = find_claude_command()?;
+    let claude = find_claude_command().await?;
     let mut cmd = Command::new(&claude);
+    suppress_windows_console(&mut cmd);
     cmd.arg("-p")
         .arg("--output-format")
         .arg("stream-json")

@@ -19,6 +19,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use super::cli_resolver::find_cli_command;
+
 #[derive(Default)]
 pub struct CodexCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
@@ -51,18 +53,8 @@ fn append_capped_line(collected: &mut String, line: &str, limit_bytes: usize) {
     }
 }
 
-fn find_codex_command() -> Result<PathBuf, String> {
-    #[cfg(windows)]
-    {
-        if let Ok(path) = which::which("codex.cmd") {
-            return Ok(path);
-        }
-        if let Ok(path) = which::which("codex.exe") {
-            return Ok(path);
-        }
-    }
-
-    which::which("codex").map_err(|_| "`codex` not found on PATH".to_string())
+async fn find_codex_command() -> Result<PathBuf, String> {
+    find_cli_command("codex", &["codex.cmd", "codex.exe"]).await
 }
 
 fn suppress_windows_console(_cmd: &mut Command) {
@@ -77,7 +69,7 @@ fn suppress_windows_console(_cmd: &mut Command) {
 
 #[tauri::command]
 pub async fn codex_cli_detect() -> Result<DetectResult, String> {
-    let path = match find_codex_command() {
+    let path = match find_codex_command().await {
         Ok(p) => p,
         Err(error) => {
             return Ok(DetectResult {
@@ -144,7 +136,7 @@ pub async fn codex_cli_spawn(
         return Err("No prompt to send to codex CLI".to_string());
     }
 
-    let codex = find_codex_command()?;
+    let codex = find_codex_command().await?;
     let mut cmd = Command::new(&codex);
     suppress_windows_console(&mut cmd);
     cmd.arg("-a")

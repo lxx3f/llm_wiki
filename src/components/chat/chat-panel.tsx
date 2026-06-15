@@ -13,7 +13,7 @@ import { listDirectory, readFile, deleteFile } from "@/commands/fs"
 import { searchWiki } from "@/lib/search"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
-import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
+import { buildLanguageDirective, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
 import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search"
@@ -201,7 +201,6 @@ export function ChatPanel() {
       // minimal system prompt and let the model reply conversationally.
       const greetingOnly = isGreeting(text)
       if (project && greetingOnly) {
-        const outLang = getOutputLanguage(text)
         systemMessages.push({
           role: "system",
           content: [
@@ -209,7 +208,7 @@ export function ChatPanel() {
             "The user sent a casual greeting — reply briefly and naturally, in one or two sentences.",
             "Do NOT invent wiki content or pretend to have retrieved pages. Invite the user to ask a concrete question if they want information from the wiki.",
             "",
-            `Respond in ${outLang}.`,
+            buildLanguageReminder(text),
           ].join("\n"),
         })
         // Skip retrieval; queryRefs stays empty so no "Sources" chip is shown.
@@ -372,8 +371,6 @@ export function ChatPanel() {
         ).join("\n")
         const externalContext = formatExternalSearchContext(externalSearchResults)
 
-        const outLang = getOutputLanguage(text)
-
         systemMessages.push({
           role: "system",
           content: [
@@ -404,13 +401,7 @@ export function ChatPanel() {
             "",
             "---",
             "",
-            `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
-            "",
-            `You MUST write your entire response in **${outLang}**.`,
-            `The wiki content above may be in a different language, but this is IRRELEVANT to your output language.`,
-            `Ignore the language of the wiki content. Write in ${outLang} only.`,
-            `Even proper nouns should use standard ${outLang} transliteration when appropriate.`,
-            `DO NOT use any other language. This overrides all other instructions.`,
+            buildLanguageDirective(text),
           ].filter(Boolean).join("\n"),
         })
 

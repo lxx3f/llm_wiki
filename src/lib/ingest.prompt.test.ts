@@ -80,6 +80,19 @@ describe("buildGenerationPrompt language directive", () => {
     expect(prompt).toContain("keep readable CJK characters in the filename")
   })
 
+  it("preserves technical proper nouns instead of translating them into the output language", () => {
+    useWikiStore.getState().setOutputLanguage("Chinese")
+    const prompt = buildGenerationPrompt("", "", "", "source.pdf")
+
+    expect(prompt).toContain("proper nouns and technical identifiers take precedence")
+    expect(prompt).toContain("GPT-5")
+    expect(prompt).toContain("Transformer")
+    expect(prompt).toContain("standard original form")
+    expect(prompt).toContain("Do not put raw URLs, citation strings, or full paper titles directly into file paths")
+    expect(prompt).toContain("technical terms with no widely-used localized equivalent")
+    expect(prompt).not.toContain("No exceptions — not even for page names")
+  })
+
   it("makes project schema routing authoritative over default entity and concept folders", () => {
     const prompt = buildGenerationPrompt(
       "Use wiki/people/ for people. Use wiki/technologies/ for technical methods.",

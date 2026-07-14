@@ -1781,6 +1781,39 @@ impl AgentRuntime {
                     cancellation,
                 )
                 .await?;
+            if let Some(pending_wiki_write) = first_pending_wiki_write(&events) {
+                let answer = format!(
+                    "Confirmation is required before overwriting {}.",
+                    pending_wiki_write.path
+                );
+                emit_event(
+                    &mut events,
+                    &event_sink,
+                    AgentEvent::Done {
+                        session_id: session_id.clone(),
+                    },
+                );
+                let reference_count = references.len();
+                let tool_event_count = tool_events.len();
+                return Ok(AgentChatResponse {
+                    ok: true,
+                    project_id: self.project_id.clone(),
+                    session_id,
+                    mode: request.mode,
+                    message: answer.clone(),
+                    references,
+                    tool_events,
+                    events,
+                    user_input_request: None,
+                    pending_wiki_write: Some(pending_wiki_write),
+                    usage: Some(AgentUsage {
+                        prompt_chars: last_prompt_chars,
+                        completion_chars: answer.len(),
+                        reference_count,
+                        tool_event_count,
+                    }),
+                });
+            }
             if is_shell_approval_required_observation(&observation) {
                 let answer = observation.summary.clone();
                 if event_sink.is_some() {
@@ -3901,6 +3934,13 @@ fn validate_images(images: &[super::types::AgentImage]) -> Result<(), String> {
     Ok(())
 }
 
+fn first_pending_wiki_write(events: &[AgentEvent]) -> Option<PendingWikiWrite> {
+    events.iter().find_map(|event| match event {
+        AgentEvent::WikiWriteConfirmationRequired { pending_write } => Some(pending_write.clone()),
+        _ => None,
+    })
+}
+
 fn emit_event(
     events: &mut Vec<AgentEvent>,
     event_sink: &Option<AgentEventSink>,
@@ -4011,6 +4051,34 @@ mod tests {
             std::env::temp_dir().join(format!("llm-wiki-agent-test-{name}-{}", Uuid::new_v4()));
         fs::create_dir_all(root.join("wiki").join("concepts")).unwrap();
         root
+    }
+
+    #[tokio::test]
+    async fn iterative_loop_stops_after_first_pending_overwrite() {
+        let project = temp_project("loop-first-pending-write");
+        let first_page = project.join("wiki/first.md");
+        let second_page = project.join("wiki/second.md");
+        fs::write(&first_page, "before first").unwrap();
+        fs::write(&second_page, "before second").unwrap();
+        let store = PendingWikiWriteStore::default();
+        let runtime = AgentRuntime::new_with_pending_writes(
+            "project-1", project.to_string_lossy(), None, None, None, None, store.clone(),
+        );
+        let request = AgentChatRequest { session_id: Some("s1".to_string()), ..Default::default() };
+        let mut events = Vec::new();
+        let first = runtime.queue_wiki_write_if_confirmation_required(
+            &request, "s1", "wiki/first.md", "after first", &mut events, &None,
+        ).unwrap().unwrap();
+
+        // This mirrors the loop's immediate-return guard: a second planned tool
+        // call must not be executed after the first pending overwrite.
+        assert!(first_pending_wiki_write(&events).is_some());
+        assert_eq!(first_pending_wiki_write(&events).unwrap().id, first.id);
+        assert_eq!(events.iter().filter(|event| matches!(event, AgentEvent::WikiWriteConfirmationRequired { .. })).count(), 1);
+        assert_eq!(fs::read_to_string(&first_page).unwrap(), "before first");
+        assert_eq!(fs::read_to_string(&second_page).unwrap(), "before second");
+        assert!(store.take("project-1", "s1", &first.id).is_ok());
+        let _ = fs::remove_dir_all(project);
     }
 
     #[tokio::test]

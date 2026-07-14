@@ -17,6 +17,7 @@ use super::context::{
 };
 use super::events::AgentEvent;
 use super::permissions::{AgentCapability, PermissionPolicy};
+use super::pending_writes::PendingWikiWriteStore;
 use super::provider::{AgentLlmProvider, LlmClient, LlmConfig};
 use super::router::route_query;
 use super::skills::{load_project_skills, AgentSkill};
@@ -24,7 +25,7 @@ use super::tools::{self, AnyTxtConfig, ToolRegistry, WebSearchConfig};
 use super::types::{
     AgentChatRequest, AgentChatResponse, AgentMode, AgentReference, AgentRetrievalMode,
     AgentSkillMode, AgentToolEvent, AgentUsage, AgentUserInputField, AgentUserInputOption,
-    AgentUserInputRequest,
+    AgentUserInputRequest, PendingWikiWrite, WikiWriteMode,
 };
 use super::workspace::{agent_workspace_display, AGENT_WORKSPACE_DIR};
 
@@ -54,6 +55,7 @@ pub struct AgentRuntime {
     llm_config: Option<LlmConfig>,
     web_search_config: Option<WebSearchConfig>,
     anytxt_config: Option<AnyTxtConfig>,
+    pending_writes: PendingWikiWriteStore,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -136,6 +138,26 @@ impl AgentRuntime {
         web_search_config: Option<WebSearchConfig>,
         anytxt_config: Option<AnyTxtConfig>,
     ) -> Self {
+        Self::new_with_pending_writes(
+            project_id,
+            project_path,
+            embedding_config,
+            llm_config,
+            web_search_config,
+            anytxt_config,
+            PendingWikiWriteStore::default(),
+        )
+    }
+
+    pub fn new_with_pending_writes(
+        project_id: impl Into<String>,
+        project_path: impl Into<String>,
+        embedding_config: Option<SearchEmbeddingConfig>,
+        llm_config: Option<LlmConfig>,
+        web_search_config: Option<WebSearchConfig>,
+        anytxt_config: Option<AnyTxtConfig>,
+        pending_writes: PendingWikiWriteStore,
+    ) -> Self {
         Self {
             project_id: project_id.into(),
             project_path: project_path.into(),
@@ -143,7 +165,27 @@ impl AgentRuntime {
             llm_config,
             web_search_config,
             anytxt_config,
+            pending_writes,
         }
+    }
+
+    fn queue_wiki_write_if_confirmation_required(
+        &self,
+        request: &AgentChatRequest,
+        session_id: &str,
+        path: &str,
+        content: &str,
+        events: &mut Vec<AgentEvent>,
+        event_sink: &Option<AgentEventSink>,
+    ) -> Result<Option<PendingWikiWrite>, String> {
+        if matches!(request.wiki_write_mode, WikiWriteMode::Confirm)
+            && tools::wiki_page_exists(&self.project_path, path)?
+        {
+            let pending = self.pending_writes.insert(&self.project_id, session_id, path, content);
+            emit_event(events, event_sink, AgentEvent::WikiWriteConfirmationRequired { pending_write: pending.clone() });
+            return Ok(Some(pending));
+        }
+        Ok(None)
     }
 
     #[allow(dead_code)]
@@ -195,6 +237,7 @@ impl AgentRuntime {
             },
         );
         let mut references = Vec::new();
+        let mut pending_wiki_write = None;
         let permission_policy = PermissionPolicy::api_default();
         let router = route_query(message, request.mode, &request.tools);
         let skills = load_project_skills(&self.project_path, &request.skills);
@@ -380,6 +423,15 @@ impl AgentRuntime {
                 &event_sink,
                 AgentEvent::tool_start("wiki.write_page", Some(path.to_string())),
             );
+            if let Some(pending) = self.queue_wiki_write_if_confirmation_required(
+                &request, &session_id, path, content, &mut events, &event_sink,
+            )? {
+                pending_wiki_write = Some(pending);
+                tool_emit_event(&mut tool_events, &mut events, &event_sink, AgentToolEvent {
+                    tool: "wiki.write_page".to_string(), status: "confirmation_required".to_string(), detail: Some(path.to_string()),
+                });
+                emit_event(&mut events, &event_sink, AgentEvent::tool_end("wiki.write_page", Some("confirmation required".to_string())));
+            } else {
             let tool_context = self.tool_context();
             match execute_tool_with_cancellation(
                 tool_registry.execute(
@@ -453,6 +505,7 @@ impl AgentRuntime {
                     );
                 }
             }
+        }
         }
 
         if let Some((command, timeout_seconds)) = shell_call {
@@ -1281,6 +1334,7 @@ impl AgentRuntime {
             tool_events,
             events,
             user_input_request: None,
+            pending_wiki_write,
             usage: Some(usage),
         })
     }
@@ -1372,6 +1426,7 @@ impl AgentRuntime {
                 let observation = self
                     .execute_agent_loop_tool(
                         request,
+                        &session_id,
                         &approved_action,
                         &permission_policy,
                         &tool_registry,
@@ -1521,7 +1576,8 @@ impl AgentRuntime {
                     references,
                     tool_events,
                     events,
-                    user_input_request: None,
+                    pending_wiki_write: None,
+            user_input_request: None,
                     usage: Some(AgentUsage {
                         prompt_chars: last_prompt_chars,
                         completion_chars: answer.len(),
@@ -1580,7 +1636,8 @@ impl AgentRuntime {
                     references,
                     tool_events,
                     events,
-                    user_input_request: None,
+                    pending_wiki_write: None,
+            user_input_request: None,
                     usage: Some(usage),
                 });
             }
@@ -1621,7 +1678,8 @@ impl AgentRuntime {
                     references,
                     tool_events,
                     events,
-                    user_input_request: None,
+                    pending_wiki_write: None,
+            user_input_request: None,
                     usage: Some(usage),
                 });
             }
@@ -1675,7 +1733,8 @@ impl AgentRuntime {
                     references,
                     tool_events,
                     events,
-                    user_input_request: Some(request_form),
+                    pending_wiki_write: None,
+            user_input_request: Some(request_form),
                     usage: Some(AgentUsage {
                         prompt_chars: last_prompt_chars,
                         completion_chars: answer.len(),
@@ -1710,6 +1769,7 @@ impl AgentRuntime {
             let observation = self
                 .execute_agent_loop_tool(
                     request,
+                    &session_id,
                     &action,
                     &permission_policy,
                     &tool_registry,
@@ -1750,7 +1810,8 @@ impl AgentRuntime {
                     references,
                     tool_events,
                     events,
-                    user_input_request: None,
+                    pending_wiki_write: None,
+            user_input_request: None,
                     usage: Some(AgentUsage {
                         prompt_chars: last_prompt_chars,
                         completion_chars: observation.summary.len(),
@@ -1808,6 +1869,7 @@ impl AgentRuntime {
             tool_events,
             events,
             user_input_request: None,
+            pending_wiki_write: None,
             usage: Some(AgentUsage {
                 prompt_chars: last_prompt_chars,
                 completion_chars: answer.len(),
@@ -1821,6 +1883,7 @@ impl AgentRuntime {
     async fn execute_agent_loop_tool(
         &self,
         request: &AgentChatRequest,
+        session_id: &str,
         action: &AgentLoopAction,
         permission_policy: &PermissionPolicy,
         tool_registry: &tools::BuiltinToolRegistry,
@@ -2044,6 +2107,18 @@ impl AgentRuntime {
             event_sink,
             AgentEvent::tool_start(tool, input_detail),
         );
+
+        if tool == "wiki.write_page" {
+            let path = input.get("path").and_then(Value::as_str).ok_or_else(|| "wiki.write_page requires path".to_string())?;
+            let content = input.get("content").and_then(Value::as_str).ok_or_else(|| "wiki.write_page requires content".to_string())?;
+            if let Some(pending) = self.queue_wiki_write_if_confirmation_required(request, session_id, path, content, events, event_sink)? {
+                tool_emit_event(tool_events, events, event_sink, AgentToolEvent {
+                    tool: tool.to_string(), status: "confirmation_required".to_string(), detail: Some(path.to_string()),
+                });
+                emit_event(events, event_sink, AgentEvent::tool_end(tool, Some("confirmation required".to_string())));
+                return Ok(AgentObservation { tool: tool.to_string(), summary: format!("confirmation required for {}", pending.path) });
+            }
+        }
 
         let result = execute_tool_with_cancellation(
             tool_registry.execute(tool, input, self.tool_context()),

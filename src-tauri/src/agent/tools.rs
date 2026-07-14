@@ -653,7 +653,12 @@ pub fn write_wiki_page_with_options(
     Ok(write_wiki_page_with_activity(project_path, rel_path, content, allow_overwrite)?.reference)
 }
 
-fn write_wiki_page_with_activity(
+pub(crate) fn wiki_page_exists(project_path: &str, rel_path: &str) -> Result<bool, String> {
+    let rel = normalize_wiki_write_path(rel_path)?;
+    Ok(safe_project_join(project_path, &rel)?.is_file())
+}
+
+pub(crate) fn write_wiki_page_with_activity(
     project_path: &str,
     rel_path: &str,
     content: &str,

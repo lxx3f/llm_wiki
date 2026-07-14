@@ -9,6 +9,7 @@ pub mod cancel;
 pub mod context;
 pub mod events;
 pub mod permissions;
+pub mod pending_writes;
 pub mod provider;
 pub mod router;
 pub mod runtime;

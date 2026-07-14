@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::types::{AgentReference, AgentUserInputRequest};
+use super::types::{AgentReference, AgentUserInputRequest, PendingWikiWrite};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type")]
@@ -38,6 +38,10 @@ pub enum AgentEvent {
     },
     UserInputRequired {
         request: AgentUserInputRequest,
+    },
+    WikiWriteConfirmationRequired {
+        #[serde(rename = "pendingWrite")]
+        pending_write: PendingWikiWrite,
     },
     Done {
         session_id: String,
@@ -102,6 +106,22 @@ mod tests {
         assert_eq!(value["type"], "fileChanged");
         assert_eq!(value["existedBefore"], true);
         assert_eq!(value["previousContent"], "before");
+    }
+
+    #[test]
+    fn wiki_write_confirmation_event_serializes_with_camelcase_tag() {
+        let value = serde_json::to_value(AgentEvent::WikiWriteConfirmationRequired {
+            pending_write: PendingWikiWrite {
+                id: "pending-1".to_string(),
+                path: "wiki/a.md".to_string(),
+                content: "after".to_string(),
+                existed_before: true,
+            },
+        })
+        .unwrap();
+
+        assert_eq!(value["type"], "wikiWriteConfirmationRequired");
+        assert_eq!(value["pendingWrite"]["path"], "wiki/a.md");
     }
 
     #[test]

@@ -1717,13 +1717,14 @@ fn handle_chat(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
         }
     }
     let runtime_config = load_agent_runtime_config(app);
-    let runtime = agent::AgentRuntime::new(
+    let runtime = agent::AgentRuntime::new_with_pending_writes(
         project.id.clone(),
         project.path.clone(),
         runtime_config.embedding,
         runtime_config.llm,
         runtime_config.web_search,
         runtime_config.anytxt,
+        app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
     );
     let user_message_for_session = req.message.clone();
     let persist_session = req.persist_session;
@@ -1763,6 +1764,7 @@ fn handle_chat(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
                 "references": response.references,
                 "toolEvents": response.tool_events,
                 "events": response.events,
+                "pendingWikiWrite": response.pending_wiki_write,
                 "usage": response.usage,
             }))
         }

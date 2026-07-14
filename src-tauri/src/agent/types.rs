@@ -31,6 +31,37 @@ impl Default for AgentRetrievalMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WikiWriteMode {
+    Confirm,
+    Direct,
+}
+
+impl Default for WikiWriteMode {
+    fn default() -> Self {
+        Self::Confirm
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingWikiWrite {
+    pub id: String,
+    pub path: String,
+    pub content: String,
+    pub existed_before: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfirmedWikiWrite {
+    pub reference: AgentReference,
+    pub existed_before: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_content: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolOptions {
@@ -95,6 +126,8 @@ pub struct AgentChatRequest {
     #[serde(default)]
     pub retrieval_mode: AgentRetrievalMode,
     #[serde(default)]
+    pub wiki_write_mode: WikiWriteMode,
+    #[serde(default)]
     pub tools: AgentToolOptions,
     #[serde(default)]
     pub top_k: Option<usize>,
@@ -144,6 +177,7 @@ impl Default for AgentChatRequest {
             run_id: None,
             mode: AgentMode::default(),
             retrieval_mode: AgentRetrievalMode::default(),
+            wiki_write_mode: WikiWriteMode::default(),
             tools: AgentToolOptions::default(),
             top_k: None,
             include_content: None,
@@ -270,6 +304,8 @@ pub struct AgentChatResponse {
     pub events: Vec<super::events::AgentEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_input_request: Option<AgentUserInputRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_wiki_write: Option<PendingWikiWrite>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<AgentUsage>,
 }

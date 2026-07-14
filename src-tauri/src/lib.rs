@@ -9,7 +9,7 @@ mod server_bind;
 mod tray;
 mod types;
 
-use panic_guard::run_guarded;
+use panic_guard::{run_guarded, run_guarded_async};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Mutex;
@@ -102,13 +102,14 @@ async fn agent_start_turn(
         }
     }
     let runtime_config = load_agent_runtime_config(&app);
-    let runtime = agent::AgentRuntime::new(
+    let runtime = agent::AgentRuntime::new_with_pending_writes(
         project.id.clone(),
         project.path.clone(),
         runtime_config.embedding,
         runtime_config.llm,
         runtime_config.web_search,
         runtime_config.anytxt,
+        app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
     );
     let user_message = request.message.clone();
     let persist_session = request.persist_session;
@@ -132,6 +133,33 @@ async fn agent_start_turn(
             );
     }
     Ok(response)
+}
+
+#[tauri::command]
+async fn agent_confirm_wiki_write(
+    app: tauri::AppHandle,
+    project_id: String,
+    session_id: String,
+    pending_write_id: String,
+) -> Result<agent::types::AgentConfirmedWikiWrite, String> {
+    run_guarded_async("agent_confirm_wiki_write", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        let pending = app
+            .state::<agent::pending_writes::PendingWikiWriteStore>()
+            .take(&project.id, &session_id, &pending_write_id)?;
+        let output = agent::tools::write_wiki_page_with_activity(
+            &project.path,
+            &pending.path,
+            &pending.content,
+            true,
+        )?;
+        Ok(agent::types::AgentConfirmedWikiWrite {
+            reference: output.reference,
+            existed_before: output.existed_before,
+            previous_content: output.previous_content,
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -186,13 +214,14 @@ async fn agent_start_turn_stream(
             .collect();
     }
     let runtime_config = load_agent_runtime_config(&app);
-    let runtime = agent::AgentRuntime::new(
+    let runtime = agent::AgentRuntime::new_with_pending_writes(
         project.id.clone(),
         project.path.clone(),
         runtime_config.embedding,
         runtime_config.llm,
         runtime_config.web_search,
         runtime_config.anytxt,
+        app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
     );
     let app_for_task = app.clone();
     let project_for_task = project.clone();
@@ -593,6 +622,7 @@ pub fn run() {
             app.manage(commands::codex_cli::CodexCliState::default());
             app.manage(commands::file_sync::FileSyncState::default());
             app.manage(agent::session::AgentSessionStore::default());
+            app.manage(agent::pending_writes::PendingWikiWriteStore::default());
             app.manage(agent::cancel::AgentCancellationRegistry::default());
             app.manage(CloseBehaviorState(Mutex::new("minimize".to_string())));
             app.manage(TrayAvailabilityState(Mutex::new(false)));
@@ -652,6 +682,7 @@ pub fn run() {
             api_server_reload_config,
             agent_start_turn,
             agent_start_turn_stream,
+            agent_confirm_wiki_write,
             agent_cancel_turn,
             agent_get_session,
             agent_list_sessions,

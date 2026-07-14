@@ -4,7 +4,7 @@ export type WikiWriteMode = "confirm" | "direct"
 
 function relativeWikiMarkdown(projectPath: string, path: string): string | null {
   const root = normalizePath(projectPath).replace(/\/+$/g, "")
-  const candidate = normalizePath(path).replace(/^\/+/, "")
+  const candidate = normalizePath(path)
   const relative = isAbsolutePath(candidate)
     ? candidate.startsWith(`${root}/`) ? candidate.slice(root.length + 1) : null
     : candidate

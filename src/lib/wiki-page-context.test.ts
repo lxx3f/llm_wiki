@@ -14,6 +14,12 @@ describe("getWikiContextFiles", () => {
     ])).toEqual(["wiki/current.md", "wiki/related.md"])
   })
 
+  it("accepts an absolute Unix wiki page below the project root", () => {
+    expect(getWikiContextFiles("/tmp/wiki-project", "/tmp/wiki-project/wiki/current.md", [])).toEqual([
+      "wiki/current.md",
+    ])
+  })
+
   it("rejects paths outside the project wiki directory", () => {
     expect(getWikiContextFiles(root, "C:/other/wiki/nope.md", [
       "../outside.md",

@@ -135,6 +135,26 @@ async fn agent_start_turn(
     Ok(response)
 }
 
+fn confirm_pending_wiki_write(
+    store: &agent::pending_writes::PendingWikiWriteStore,
+    project: &AgentProjectEntry,
+    session_id: &str,
+    pending_write_id: &str,
+) -> Result<agent::types::AgentConfirmedWikiWrite, String> {
+    let pending = store.take(&project.id, session_id, pending_write_id)?;
+    let output = agent::tools::write_wiki_page_with_activity(
+        &project.path,
+        &pending.path,
+        &pending.content,
+        true,
+    )?;
+    Ok(agent::types::AgentConfirmedWikiWrite {
+        reference: output.reference,
+        existed_before: output.existed_before,
+        previous_content: output.previous_content,
+    })
+}
+
 #[tauri::command]
 async fn agent_confirm_wiki_write(
     app: tauri::AppHandle,
@@ -144,20 +164,8 @@ async fn agent_confirm_wiki_write(
 ) -> Result<agent::types::AgentConfirmedWikiWrite, String> {
     run_guarded_async("agent_confirm_wiki_write", async move {
         let project = resolve_agent_project(&app, &project_id)?;
-        let pending = app
-            .state::<agent::pending_writes::PendingWikiWriteStore>()
-            .take(&project.id, &session_id, &pending_write_id)?;
-        let output = agent::tools::write_wiki_page_with_activity(
-            &project.path,
-            &pending.path,
-            &pending.content,
-            true,
-        )?;
-        Ok(agent::types::AgentConfirmedWikiWrite {
-            reference: output.reference,
-            existed_before: output.existed_before,
-            previous_content: output.previous_content,
-        })
+        let store = app.state::<agent::pending_writes::PendingWikiWriteStore>();
+        confirm_pending_wiki_write(&store, &project, &session_id, &pending_write_id)
     })
     .await
 }
@@ -801,3 +809,28 @@ fn apply_linux_webkit_compat_env() {
 
 #[cfg(not(target_os = "linux"))]
 fn apply_linux_webkit_compat_env() {}
+
+
+#[cfg(test)]
+mod confirmation_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn confirmation_is_bound_single_use_and_writes_through_history_path() {
+        let root = std::env::temp_dir().join(format!("llm-wiki-confirm-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("wiki")).unwrap();
+        let project = AgentProjectEntry { id: "p1".into(), name: "Test".into(), path: root.to_string_lossy().into_owned(), current: true };
+        fs::write(root.join("wiki/page.md"), "before").unwrap();
+        let store = agent::pending_writes::PendingWikiWriteStore::default();
+        let pending = store.insert("p1", "s1", "wiki/page.md", "after");
+        assert!(confirm_pending_wiki_write(&store, &project, "wrong", &pending.id).is_err());
+        let confirmed = confirm_pending_wiki_write(&store, &project, "s1", &pending.id).unwrap();
+        assert!(confirmed.existed_before);
+        assert_eq!(confirmed.previous_content.as_deref(), Some("before"));
+        assert_eq!(fs::read_to_string(root.join("wiki/page.md")).unwrap(), "after");
+        assert!(confirm_pending_wiki_write(&store, &project, "s1", &pending.id).is_err());
+        assert!(confirm_pending_wiki_write(&store, &project, "s1", "expired-id").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+}

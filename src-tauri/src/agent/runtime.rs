@@ -1857,6 +1857,10 @@ impl AgentRuntime {
                 session_id: session_id.clone(),
             },
         );
+        let pending_wiki_write = events.iter().rev().find_map(|event| match event {
+            AgentEvent::WikiWriteConfirmationRequired { pending_write } => Some(pending_write.clone()),
+            _ => None,
+        });
         let reference_count = references.len();
         let tool_event_count = tool_events.len();
         Ok(AgentChatResponse {
@@ -1869,7 +1873,7 @@ impl AgentRuntime {
             tool_events,
             events,
             user_input_request: None,
-            pending_wiki_write: None,
+            pending_wiki_write,
             usage: Some(AgentUsage {
                 prompt_chars: last_prompt_chars,
                 completion_chars: answer.len(),
@@ -4007,6 +4011,71 @@ mod tests {
             std::env::temp_dir().join(format!("llm-wiki-agent-test-{name}-{}", Uuid::new_v4()));
         fs::create_dir_all(root.join("wiki").join("concepts")).unwrap();
         root
+    }
+
+    #[tokio::test]
+    async fn confirm_mode_queues_existing_wiki_page_without_overwriting() {
+        let project = temp_project("confirm-existing-write");
+        let page = project.join("wiki/page.md");
+        fs::write(&page, "before").unwrap();
+        let store = PendingWikiWriteStore::default();
+        let runtime = AgentRuntime::new_with_pending_writes(
+            "project-1", project.to_string_lossy(), None, None, None, None, store,
+        );
+        let request = AgentChatRequest {
+            session_id: Some("s1".to_string()),
+            ..Default::default()
+        };
+        let mut events = Vec::new();
+        let pending = runtime
+            .queue_wiki_write_if_confirmation_required(
+                &request, "s1", "wiki/page.md", "after", &mut events, &None,
+            )
+            .unwrap()
+            .expect("confirm mode should queue an existing page");
+
+        assert_eq!(pending.path, "wiki/page.md");
+        assert_eq!(fs::read_to_string(&page).unwrap(), "before");
+        assert!(matches!(
+            events.as_slice(),
+            [AgentEvent::WikiWriteConfirmationRequired { .. }]
+        ));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn direct_mode_overwrites_existing_wiki_page_and_emits_file_change() {
+        let project = temp_project("direct-existing-write");
+        let page = project.join("wiki/page.md");
+        fs::write(&page, "before").unwrap();
+        let runtime = AgentRuntime::new_with_pending_writes(
+            "project-1", project.to_string_lossy(), None, None, None, None, PendingWikiWriteStore::default(),
+        );
+        let request = AgentChatRequest {
+            wiki_write_mode: WikiWriteMode::Direct,
+            ..Default::default()
+        };
+        let mut events = Vec::new();
+        assert!(runtime
+            .queue_wiki_write_if_confirmation_required(
+                &request, "s1", "wiki/page.md", "after", &mut events, &None,
+            )
+            .unwrap()
+            .is_none());
+        let output = tools::write_wiki_page_with_activity(
+            &project.to_string_lossy(), "wiki/page.md", "after", true,
+        )
+        .unwrap();
+        emit_event(&mut events, &None, AgentEvent::FileChanged {
+            path: output.reference.path,
+            tool: "wiki.write_page".to_string(),
+            existed_before: output.existed_before,
+            previous_content: output.previous_content,
+        });
+
+        assert_eq!(fs::read_to_string(&page).unwrap(), "after");
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::FileChanged { .. })));
+        let _ = fs::remove_dir_all(project);
     }
 
     #[tokio::test]

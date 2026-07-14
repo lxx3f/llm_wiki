@@ -2,6 +2,7 @@ import { create } from "zustand"
 import type { ChatMessage, ContentBlock } from "@/lib/llm-client"
 import i18n from "@/i18n"
 import type { ChatAgentFileChange, ChatAgentMode, ChatAgentStep, ChatRetrievalMode, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { WikiWriteMode } from "@/lib/wiki-page-context"
 
 /**
  * An image attached to a user message. Field names mirror the
@@ -22,6 +23,8 @@ export interface Conversation {
   updatedAt: number
   selectedSkills?: string[]
   contextFiles?: string[]
+  manualContextFiles?: string[]
+  wikiWriteMode?: WikiWriteMode
 }
 
 export interface MessageReference {
@@ -90,6 +93,8 @@ interface ChatState {
   setRetrievalMode: (mode: ChatRetrievalMode) => void
   setSelectedSkills: (skills: string[]) => void
   setSelectedContextFiles: (paths: string[]) => void
+  setManualContextFiles: (paths: string[]) => void
+  setWikiWriteMode: (mode: WikiWriteMode) => void
   setDisabledSkills: (skills: string[]) => void
   removeLastAssistantMessage: () => void  // for regenerate: remove last assistant reply
 
@@ -135,6 +140,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       updatedAt: now,
       selectedSkills: [],
       contextFiles: [],
+      manualContextFiles: [],
+      wikiWriteMode: "confirm",
     }
     set((state) => ({
       conversations: [newConversation, ...state.conversations],
@@ -344,6 +351,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? state.conversations.map((conversation) =>
             conversation.id === state.activeConversationId
               ? { ...conversation, contextFiles: selectedContextFiles }
+              : conversation
+          )
+        : state.conversations,
+    })),
+
+  setManualContextFiles: (manualContextFiles) =>
+    set((state) => ({
+      conversations: state.activeConversationId
+        ? state.conversations.map((conversation) =>
+            conversation.id === state.activeConversationId
+              ? { ...conversation, manualContextFiles: Array.from(new Set(manualContextFiles)) }
+              : conversation
+          )
+        : state.conversations,
+    })),
+
+  setWikiWriteMode: (wikiWriteMode) =>
+    set((state) => ({
+      conversations: state.activeConversationId
+        ? state.conversations.map((conversation) =>
+            conversation.id === state.activeConversationId
+              ? { ...conversation, wikiWriteMode }
               : conversation
           )
         : state.conversations,

@@ -150,6 +150,21 @@ describe("chat-store conversation isolation", () => {
     expect(useChatStore.getState().selectedContextFiles).toEqual(["raw/sources/source.txt"])
   })
 
+  it("keeps manual wiki context and write mode per conversation", () => {
+    const first = useChatStore.getState().createConversation()
+    useChatStore.getState().setManualContextFiles(["wiki/a.md", "wiki/a.md", "wiki/b.md"])
+    useChatStore.getState().setWikiWriteMode("direct")
+    const second = useChatStore.getState().createConversation()
+
+    expect(useChatStore.getState().conversations.find((item) => item.id === second)).toMatchObject({
+      manualContextFiles: [], wikiWriteMode: "confirm",
+    })
+    useChatStore.getState().setActiveConversation(first)
+    expect(useChatStore.getState().conversations.find((item) => item.id === first)).toMatchObject({
+      manualContextFiles: ["wiki/a.md", "wiki/b.md"], wikiWriteMode: "direct",
+    })
+  })
+
   it("stores the context file snapshot on the user message", () => {
     const conversationId = useChatStore.getState().createConversation()
     useChatStore.getState().addMessageToConversation(

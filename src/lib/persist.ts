@@ -111,12 +111,23 @@ export async function saveChatHistory(
   }
 }
 
+function normalizeConversation(conversation: Conversation): Conversation {
+  const manualContextFiles = Array.isArray(conversation.manualContextFiles)
+    ? Array.from(new Set(conversation.manualContextFiles.filter((path): path is string => typeof path === "string")))
+    : []
+  return {
+    ...conversation,
+    manualContextFiles,
+    wikiWriteMode: conversation.wikiWriteMode === "direct" ? "direct" : "confirm",
+  }
+}
+
 export async function loadChatHistory(projectPath: string): Promise<PersistedChatData> {
   const pp = normalizePath(projectPath)
   try {
     // Try new format: separate files per conversation
     const convContent = await readFile(`${pp}/.llm-wiki/conversations.json`)
-    const conversations = JSON.parse(convContent) as Conversation[]
+    const conversations = (JSON.parse(convContent) as Conversation[]).map(normalizeConversation)
 
     const allMessages: DisplayMessage[] = []
     for (const conv of conversations) {
@@ -162,12 +173,15 @@ export async function loadChatHistory(projectPath: string): Promise<PersistedCha
           ...m,
           conversationId: "default",
         }))
-        return { conversations: [defaultConv], messages: migratedMessages }
+        return { conversations: [normalizeConversation(defaultConv)], messages: migratedMessages }
       }
 
       // Old combined format
       const data = parsed as PersistedChatData
-      return data
+      return {
+        conversations: Array.isArray(data.conversations) ? data.conversations.map(normalizeConversation) : [],
+        messages: Array.isArray(data.messages) ? data.messages : [],
+      }
     } catch {
       return { conversations: [], messages: [] }
     }
@@ -194,12 +208,12 @@ function conversationFromMessages(id: string, messages: DisplayMessage[]): Conve
   const createdAt = timestamps.length > 0 ? Math.min(...timestamps) : Date.now()
   const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : createdAt
   const firstUser = messages.find((message) => message.role === "user" && message.content.trim())
-  return {
+  return normalizeConversation({
     id,
     title: firstUser?.content.slice(0, 50) || "Previous Conversation",
     createdAt,
     updatedAt,
-  }
+  })
 }
 
 async function recoverChatHistoryFromOrphanChatFiles(projectPath: string): Promise<PersistedChatData> {

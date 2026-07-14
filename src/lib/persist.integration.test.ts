@@ -238,11 +238,34 @@ describe("chat persistence — round-trip (new format)", () => {
     await saveChatHistory(tmp.path, convs, msgs)
     const loaded = await loadChatHistory(tmp.path)
 
-    expect(loaded.conversations).toEqual(convs)
+    expect(loaded.conversations).toEqual(convs.map((conversation) => ({
+      ...conversation,
+      manualContextFiles: [],
+      wikiWriteMode: "confirm" as const,
+    })))
     // Messages may be returned in a different order (grouped by conv file),
     // so compare as sets.
     expect(loaded.messages).toEqual(expect.arrayContaining(msgs))
     expect(loaded.messages).toHaveLength(2)
+  })
+
+  it("normalizes persisted manual page context and write mode", async () => {
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/conversations.json`,
+      JSON.stringify([{
+        ...makeConv("c1"),
+        manualContextFiles: ["wiki/a.md", 42, "wiki/a.md", "wiki/b.md"],
+        wikiWriteMode: "unexpected",
+      }]),
+    )
+    await writeFileRaw(`${tmp.path}/.llm-wiki/chats/c1.json`, "[]")
+
+    const loaded = await loadChatHistory(tmp.path)
+
+    expect(loaded.conversations[0]).toMatchObject({
+      manualContextFiles: ["wiki/a.md", "wiki/b.md"],
+      wikiWriteMode: "confirm",
+    })
   })
 
   it("does not persist base64 chat images into conversation JSON", async () => {

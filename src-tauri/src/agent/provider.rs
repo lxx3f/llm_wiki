@@ -130,6 +130,7 @@ impl LlmClient {
     pub fn new(config: LlmConfig) -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(15))
             .build()
             .map_err(|err| format!("Failed to build LLM HTTP client: {err}"))?;
         Ok(Self { config, client })
@@ -625,11 +626,11 @@ fn anthropic_headers(config: &LlmConfig, url: &str) -> Result<HeaderMap, String>
     let key = config.api_key.trim();
     if !key.is_empty() {
         let name = if requires_bearer_auth(url) {
-            "Authorization"
+            "authorization"
         } else {
             "x-api-key"
         };
-        let value = if name == "Authorization" {
+        let value = if name == "authorization" {
             format!("Bearer {key}")
         } else {
             key.to_string()

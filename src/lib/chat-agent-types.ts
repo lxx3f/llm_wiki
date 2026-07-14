@@ -94,3 +94,10 @@ export interface ChatAgentFileChange {
   /** Runtime-only post-write snapshot used to reject stale or unsafe undo. */
   afterContent?: string
 }
+
+export interface ChatPendingWikiWrite {
+  id: string
+  path: string
+  content: string
+  existedBefore: boolean
+}

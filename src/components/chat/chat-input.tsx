@@ -22,6 +22,7 @@ export interface ChatSendOptions {
   retrievalMode: ChatRetrievalMode
   skills: string[]
   contextFiles: string[]
+  wikiWriteMode?: "confirm" | "direct"
   skillMode?: "auto" | "explicit"
   approvedShellCommands?: string[]
   shellCommand?: string

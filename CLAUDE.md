@@ -110,6 +110,8 @@ GitHub CI 当前只验证前端、MCP 和 Rust 能构建，不运行上述测试
 
 不要在 React、API handler 或 MCP server 中重新实现 Agent 核心，否则三种入口会产生行为漂移。新增 Agent 工具应在 `src-tauri/src/agent/tools.rs` 注册，并遵守该文件集中定义的读写、命令和输出上限。
 
+Wiki 写入受控覆盖：会话级 `WikiWriteMode`（`confirm` / `direct`）随请求传入。默认 `confirm` 下，对已存在 wiki 页面，`pending_writes.rs` 的 `PendingWikiWriteStore` 签发一次性、绑定 `project_id`/`session_id`、带 TTL 的 token，UI 通过 `WikiWriteConfirmationRequired` 事件显示确认卡；用户确认后调用 `agent_confirm_wiki_write` 命令复用 `tools::write_wiki_page_with_activity` 完成实际写入并返回 `AgentConfirmedWikiWrite`（含 `reference.path`、`existedBefore`、`previousContent`）。会话级覆盖策略在 `persist.ts` 加载时归一化为 `confirm`/`direct`，API/MCP 入口默认仍是 `confirm`。`WikiPageContext` 工具类型需 `pub(crate)` 化以便确认 command 复用，但保留既有公共函数不删除。
+
 ### 本地 API 与 MCP
 
 `src-tauri/src/api_server.rs` 提供项目、文件、Review、搜索、图谱、重扫和 Chat 路由，并复用 Rust 搜索与 `AgentRuntime`。它还承担 token 校验、路径 allow-list、`safe_join`、CORS 和并发限制。新增 endpoint 时必须沿用这些边界；不要直接拼接用户传入路径。
@@ -123,6 +125,7 @@ GitHub CI 当前只验证前端、MCP 和 Rust 能构建，不运行上述测试
 - **i18n**：新增或修改翻译键时同步更新 `src/i18n/locales/en.json` 与 `zh.json`。`src/i18n/i18n-parity.test.ts` 会检查键集合、非空值和复数键配对。
 - **TypeScript**：前端和 MCP 均开启 strict、unused 检查和 switch fallthrough 检查；前端 `@/*` 映射到 `src/*`。
 - **API/UI 一致性**：文件、搜索和 Chat 等有副作用或安全边界的业务规则优先放在 Rust，共享给 UI/API/MCP，而不是分散复制。
+- **页面助手共享会话流**：Wiki 视图右侧的 `WikiPageAssistant` 与全局 `ChatPanel` 必须使用同一个 `activeConversationId`、消息集合、stream state 和 Agent 请求流；流式请求期间 `Open full chat`、会话选择、新建会话、手动上下文增删和写模式控件必须禁用。任何外部入口（包括 `researchStore.panelOpen`）在流式期间不得卸载 `ChatSessionContent` 丢失组件持有的 AbortController/run ownership；右栏与 Research 必须互斥，且保留既有 `rightWidth` 拖拽。
 
 ## 发布与平台资源
 

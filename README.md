@@ -44,6 +44,7 @@
 - **Rust Backend Chat Agent** — tool-using chat runtime with wiki/source/graph/web retrieval, workspace file generation, shell approval, cancellation, and streaming tool events
 - **Agent Skills** — scan and enable local `SKILL.md` folders, select skills with `/skill`, and let the Agent read skill instructions on demand
 - **Generated Outputs Preview** — Agent-created Markdown, HTML, images, and other workspace files appear as outputs with preview and quick folder access
+- **Page Assistant (collapsible Wiki sidebar)** — open the current Wiki page with the Agent on the right side of the Wiki view; the active page is auto-attached as context, multiple pages can be pinned per session, conversations and write policies are shared with the main Chat, and overwrites of existing Wiki pages are gated behind an explicit confirmation card
 - **Mermaid Diagram Rendering** — render Mermaid code blocks directly in chat and preview, with compact syntax-error cards instead of raw parser output
 - **Async Review System** — LLM flags items for human judgment, predefined actions, pre-generated search queries
 - **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
@@ -91,6 +92,7 @@ The original is an abstract pattern document designed to be copy-pasted to an LL
 - **Activity panel** — real-time processing status showing file-by-file ingest progress
 - **All state persisted** — conversations, settings, review items, project config survive restarts
 - **Scenario templates** — Research, Reading, Personal Growth, Business, General — each pre-configures purpose.md and schema.md
+- **Collapsible Wiki right sidebar (Page Assistant)** — in the Wiki reading view the right column can switch between the Page Assistant and Deep Research, mutually exclusive; the assistant auto-attaches the current page, lets you pin additional pages per conversation, shares sessions and streams with the main chat, and keeps the existing right-column drag width. The center Wiki preview never embeds the chat
 
 ### 2. Purpose.md — The Wiki's Soul
 
@@ -250,6 +252,7 @@ Not in the original. Chat now runs through a Rust backend Agent runtime rather t
 - **Generated workspace outputs** — files produced by Agent tools are kept under `agent-workspace/`, shown as generated outputs, and can be previewed or opened from the chat
 - **User interaction forms** — skills can ask for structured user input such as single choice, multiple choice, or free text without hardcoding skill-specific UI
 - **Safer execution model** — project workspace commands can continue smoothly, while external shell commands still require explicit approval
+- **Gated Wiki overwrites** — in the default "confirm every overwrite" mode, the Agent must request a single-use, project-and-session-bound pending write before modifying an existing wiki page; the UI shows a confirmation card with path and content preview, only writes on user approval, and records a real (undoable) Agent file-activity entry. Switching to "direct writes in this conversation" skips the prompt for that session
 
 ### 10. Thinking / Reasoning Display
 

@@ -26,6 +26,48 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.4",
+    date: "2026-07-15",
+    highlights: {
+      en: [
+        "Added a collapsible Page Assistant in the Wiki reading view that auto-attaches the current page and lets you pin additional pages per conversation; sessions and write policies are shared with the main Chat.",
+        "Gated wiki overwrites behind a confirmation card: Agent writes to existing pages now go through a single-use, project-and-session-bound pending token in the Rust runtime; approval produces a real (undoable) Agent file-activity entry.",
+        "Streamed a per-conversation Wiki write policy (confirm every overwrite vs. direct writes in this conversation), persisted with the rest of the conversation state.",
+        "Added bilingual UI for the Page Assistant and the Wiki overwrite confirmation card.",
+      ],
+      zh: [
+        "Wiki 阅读视图新增可折叠「页面助手」侧栏，自动附加当前页面，每会话可手动钉多个上下文页，并与主聊天共享会话和写入策略。",
+        "对已存在 Wiki 页的覆盖强制走确认卡：Rust 后端用一次性、绑定项目与会话的 pending token 拦截，UI 显示路径与内容预览，确认后才落地，并生成可撤销的 Agent 文件活动记录。",
+        "新增每会话 Wiki 写入策略（每次覆盖前确认 / 本会话直接写入），随会话持久化。",
+        "补齐页面助手和 Wiki 覆盖确认卡的中英文界面文案。",
+      ],
+    },
+  },
+  {
+    version: "0.6.3",
+    date: "2026-07-14",
+    highlights: {
+      en: [
+        "Fixed ingest lifecycle issues including stuck queue items after cancel and retry, duplicate scan prefiltering, and source-cleanup edge cases on Windows paths.",
+      ],
+      zh: [
+        "修复摄取生命周期问题：取消/重试后队列卡死、重复扫描预筛选以及 Windows 路径下源清理边界。",
+      ],
+    },
+  },
+  {
+    version: "0.6.2",
+    date: "2026-07-12",
+    highlights: {
+      en: [
+        "Reliability fixes for project switching, search provider fallbacks, and Chat Agent retry behavior.",
+      ],
+      zh: [
+        "修复项目切换、搜索 Provider 降级和 Chat Agent 重试相关稳定性问题。",
+      ],
+    },
+  },
+  {
     version: "0.6.1",
     date: "2026-07-10",
     highlights: {

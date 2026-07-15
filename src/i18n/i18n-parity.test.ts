@@ -37,6 +37,16 @@ describe("i18n bundle parity (en.json ↔ zh.json)", () => {
   const enKeys = new Set(flattenKeys(en))
   const zhKeys = new Set(flattenKeys(zh))
 
+  it("requires page assistant translations in both locales", () => {
+    expect(en.pageAssistant).toMatchObject({
+      title: expect.any(String),
+      automaticContext: expect.any(String),
+      confirmOverwrite: expect.any(String),
+      directWrites: expect.any(String),
+    })
+    expect(Object.keys(en.pageAssistant).sort()).toEqual(Object.keys(zh.pageAssistant).sort())
+  })
+
   it("does not contain duplicate top-level JSON keys", () => {
     const findDuplicates = (fileName: string) => {
       const text = readFileSync(join(i18nDir, fileName), "utf8")

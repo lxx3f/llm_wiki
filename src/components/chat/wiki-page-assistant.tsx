@@ -1,4 +1,5 @@
 import { useMemo } from "react"
+import { useTranslation } from "react-i18next"
 import { ChevronDown, FilePlus2, MessageSquare, X } from "lucide-react"
 import { ChatSessionContent } from "./chat-session-content"
 import { Button } from "@/components/ui/button"
@@ -76,6 +77,7 @@ export function createWikiPageAssistantActions({
 }
 
 export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }: WikiPageAssistantProps) {
+  const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const projectPathIndex = useWikiStore((s) => s.projectPathIndex)
   const setActiveView = useWikiStore((s) => s.setActiveView)
@@ -123,11 +125,11 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
       <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="truncate text-sm font-semibold">Page assistant</span>
+          <span className="truncate text-sm font-semibold">{t("pageAssistant.title")}</span>
         </div>
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="xs" onClick={actions.openFullChat} disabled={isStreaming}>Open full chat</Button>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} disabled={isStreaming} aria-label="Close page assistant">
+          <Button type="button" variant="ghost" size="xs" onClick={actions.openFullChat} disabled={isStreaming}>{t("pageAssistant.openFullChat")}</Button>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} disabled={isStreaming} aria-label={t("pageAssistant.close")}>
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -136,33 +138,33 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
       <div className="shrink-0 space-y-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
           <select
-            aria-label="Conversation"
+            aria-label={t("pageAssistant.conversation")}
             value={activeConversationId ?? ""}
             onChange={(event) => actions.selectConversation(event.target.value || null)}
             disabled={isStreaming}
             className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-xs outline-none disabled:opacity-50"
           >
-            <option value="">No conversation</option>
+            <option value="">{t("pageAssistant.conversation")}</option>
             {conversations.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
           </select>
-          <Button type="button" variant="outline" size="xs" onClick={actions.createConversation} disabled={isStreaming}>New chat</Button>
+          <Button type="button" variant="outline" size="xs" onClick={actions.createConversation} disabled={isStreaming}>{t("pageAssistant.newConversation")}</Button>
         </div>
 
         <div className="space-y-1.5">
-          <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Context pages</div>
+          <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{t("pageAssistant.manualContext")}</div>
           <div className="flex flex-wrap gap-1">
             {automaticContextFile ? (
               <span className="inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 text-[10px]" title={automaticContextFile}>
                 <span className="truncate">{getFileName(automaticContextFile)}</span>
-                <span className="rounded bg-primary/15 px-1 text-[9px] text-primary">Automatic</span>
+                <span className="rounded bg-primary/15 px-1 text-[9px] text-primary">{t("pageAssistant.automaticContext")}</span>
               </span>
-            ) : <span className="text-xs text-muted-foreground">No automatic page</span>}
+            ) : <span className="text-xs text-muted-foreground">{t("pageAssistant.noAutomaticPage")}</span>}
             {contextFiles.filter((path) => path !== automaticContextFile).map((path) => (
               <span key={path} className="inline-flex items-center gap-1 rounded border bg-background px-1.5 py-0.5 text-[10px]" title={path}>
                 <span className="truncate">{getFileName(path)}</span>
                 <button
                   type="button"
-                  aria-label={`Remove ${getFileName(path)}`}
+                  aria-label={t("pageAssistant.removeContext", { name: getFileName(path) })}
                   disabled={isStreaming}
                   onClick={() => actions.removeManualContextFile(path)}
                   className="rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
@@ -176,7 +178,7 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
             <label className="flex items-center gap-1 text-xs text-muted-foreground">
               <FilePlus2 className="h-3.5 w-3.5" />
               <select
-                aria-label="Add wiki page"
+                aria-label={t("pageAssistant.addWikiPage")}
                 defaultValue=""
                 disabled={isStreaming}
                 onChange={(event) => {
@@ -186,7 +188,7 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
                 }}
                 className="min-w-0 flex-1 rounded border bg-background px-1.5 py-1 text-xs outline-none disabled:opacity-50"
               >
-                <option value="">Add wiki page</option>
+                <option value="">{t("pageAssistant.addWikiPage")}</option>
                 {availablePages.map((path) => <option key={path} value={path}>{path}</option>)}
               </select>
             </label>
@@ -195,16 +197,16 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
 
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <ChevronDown className="h-3.5 w-3.5" />
-          <span className="shrink-0">Write mode</span>
+          <span className="shrink-0">{t("pageAssistant.writeMode")}</span>
           <select
-            aria-label="Write mode"
+            aria-label={t("pageAssistant.writeMode")}
             value={writeMode}
             onChange={(event) => actions.setWriteMode(event.target.value as "confirm" | "direct")}
             disabled={isStreaming || !activeConversationId}
             className="min-w-0 flex-1 rounded border bg-background px-1.5 py-1 text-xs outline-none disabled:opacity-50"
           >
-            <option value="confirm">Confirm every overwrite</option>
-            <option value="direct">Direct writes in this conversation</option>
+            <option value="confirm">{t("pageAssistant.confirmOverwrite")}</option>
+            <option value="direct">{t("pageAssistant.directWrites")}</option>
           </select>
         </label>
       </div>

@@ -893,6 +893,29 @@
       "other": "Other"
     }
   },
+  "pageAssistant": {
+    "title": "Page assistant",
+    "open": "Open page assistant",
+    "close": "Close page assistant",
+    "openFullChat": "Open full chat",
+    "conversation": "Conversation",
+    "newConversation": "New conversation",
+    "automaticContext": "Automatic",
+    "manualContext": "Context pages",
+    "addWikiPage": "Add wiki page",
+    "removeContext": "Remove {{name}}",
+    "noAutomaticPage": "No automatic page",
+    "writeMode": "Write mode",
+    "confirmOverwrite": "Confirm every overwrite",
+    "directWrites": "Direct writes in this conversation",
+    "pendingWriteTitle": "Confirm wiki overwrite",
+    "pendingWriteDescription": "Review this change before replacing {{path}}.",
+    "confirmWrite": "Confirm write",
+    "cancelWrite": "Cancel write",
+    "writeConfirmed": "Wiki page updated.",
+    "writeExpired": "This write confirmation has expired.",
+    "writeFailed": "Wiki write failed."
+  },
   "time": {
     "justNow": "just now",
     "minutesAgo": "{{count}} min ago",

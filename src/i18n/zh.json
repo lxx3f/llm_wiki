@@ -893,6 +893,29 @@
       "other": "其他"
     }
   },
+  "pageAssistant": {
+    "title": "页面助手",
+    "open": "打开页面助手",
+    "close": "关闭页面助手",
+    "openFullChat": "打开完整对话",
+    "conversation": "会话",
+    "newConversation": "新建会话",
+    "automaticContext": "自动",
+    "manualContext": "上下文页面",
+    "addWikiPage": "添加 Wiki 页面",
+    "removeContext": "移除 {{name}}",
+    "noAutomaticPage": "没有自动页面",
+    "writeMode": "写入模式",
+    "confirmOverwrite": "每次覆盖前确认",
+    "directWrites": "本会话直接写入",
+    "pendingWriteTitle": "确认覆盖 Wiki 页面",
+    "pendingWriteDescription": "请在替换 {{path}} 前检查此更改。",
+    "confirmWrite": "确认写入",
+    "cancelWrite": "取消写入",
+    "writeConfirmed": "Wiki 页面已更新。",
+    "writeExpired": "此写入确认已过期。",
+    "writeFailed": "Wiki 写入失败。"
+  },
   "time": {
     "justNow": "刚刚",
     "minutesAgo": "{{count}} 分钟前",

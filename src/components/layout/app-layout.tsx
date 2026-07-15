@@ -14,7 +14,7 @@ import { WikiPageAssistant } from "@/components/chat/wiki-page-assistant"
 import { useResearchStore } from "@/stores/research-store"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { getAppLayoutVisibility } from "./app-layout-visibility"
-import { syncRightPanelWithResearch, type RightPanel } from "./app-layout-right-panel"
+import { reconcileRightPanel, type RightPanel } from "./app-layout-right-panel"
 
 interface AppLayoutProps {
   onSwitchProject: () => void
@@ -26,8 +26,13 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const researchPanelOpen = useResearchStore((s) => s.panelOpen)
+  const researchPanelOpenVersion = useResearchStore((s) => s.panelOpenVersion)
   const setResearchPanelOpen = useResearchStore((s) => s.setPanelOpen)
-  const [rightPanel, setRightPanel] = useState<RightPanel>(() => researchPanelOpen ? "research" : "none")
+  const [rightPanelState, setRightPanelState] = useState(() => ({
+    rightPanel: researchPanelOpen ? "research" as RightPanel : "none" as RightPanel,
+    ignoredResearchOpenVersion: null as number | null,
+  }))
+  const rightPanel = rightPanelState.rightPanel
   const [leftWidth, setLeftWidth] = useState(220)
   const [rightWidth, setRightWidth] = useState(400)
   const isDraggingLeft = useRef(false)
@@ -35,8 +40,13 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    setRightPanel((current) => syncRightPanelWithResearch(current, researchPanelOpen, isStreaming))
-  }, [researchPanelOpen, isStreaming])
+    setRightPanelState((current) => reconcileRightPanel(
+      current,
+      researchPanelOpen,
+      researchPanelOpenVersion,
+      isStreaming,
+    ))
+  }, [researchPanelOpen, researchPanelOpenVersion, isStreaming])
 
   const loadFileTree = useCallback(async () => {
     if (!project) return
@@ -96,9 +106,9 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const canOpenPageAssistant = activeView === "wiki" && (rightPanel === "none" || rightPanel === "research")
   const openPageAssistant = () => {
     setResearchPanelOpen(false)
-    setRightPanel("assistant")
+    setRightPanelState({ rightPanel: "assistant", ignoredResearchOpenVersion: null })
   }
-  const closePageAssistant = () => setRightPanel("none")
+  const closePageAssistant = () => setRightPanelState({ rightPanel: "none", ignoredResearchOpenVersion: null })
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">

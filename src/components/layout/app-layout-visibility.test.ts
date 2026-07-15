@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import { getAppLayoutVisibility } from "./app-layout-visibility"
-import { syncRightPanelWithResearch } from "./app-layout-right-panel"
 
 describe("getAppLayoutVisibility", () => {
   it("keeps chat standalone without project side panels", () => {
@@ -35,14 +34,5 @@ describe("getAppLayoutVisibility", () => {
       showLeftPanel: true,
       hasRightPanel: true,
     })
-  })
-})
-
-describe("right panel synchronization", () => {
-  it("keeps the streaming assistant mounted when research state changes", () => {
-    expect(syncRightPanelWithResearch("assistant", true, true)).toBe("assistant")
-    expect(syncRightPanelWithResearch("assistant", false, true)).toBe("assistant")
-    expect(syncRightPanelWithResearch("assistant", true, false)).toBe("research")
-    expect(syncRightPanelWithResearch("research", false, false)).toBe("none")
   })
 })

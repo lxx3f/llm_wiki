@@ -72,8 +72,7 @@ export function queueResearch(
   if (searchQueries && searchQueries.length > 0) {
     store.updateTask(taskId, { searchQueries })
   }
-  // Ensure panel is open
-  store.setPanelOpen(true)
+  // addTask opens the panel and advances its request version atomically.
   // Start processing on next tick to ensure React has rendered the panel
   setTimeout(() => {
     processQueue(projectPath, llmConfig, searchConfig)

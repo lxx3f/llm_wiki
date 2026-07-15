@@ -16,6 +16,7 @@ export interface ResearchTask {
 interface ResearchState {
   tasks: ResearchTask[]
   panelOpen: boolean
+  panelOpenVersion: number
   maxConcurrent: number
 
   addTask: (topic: string) => string
@@ -31,6 +32,7 @@ let counter = 0
 export const useResearchStore = create<ResearchState>((set, get) => ({
   tasks: [],
   panelOpen: false,
+  panelOpenVersion: 0,
   maxConcurrent: 3,
 
   addTask: (topic) => {
@@ -50,6 +52,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         },
       ],
       panelOpen: true,
+      panelOpenVersion: state.panelOpenVersion + 1,
     }))
     return id
   },
@@ -64,7 +67,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       tasks: state.tasks.filter((t) => t.id !== id),
     })),
 
-  setPanelOpen: (panelOpen) => set({ panelOpen }),
+  setPanelOpen: (panelOpen) => set((state) => ({ panelOpen, panelOpenVersion: state.panelOpenVersion + 1 })),
 
   getRunningCount: () => {
     const { tasks } = get()

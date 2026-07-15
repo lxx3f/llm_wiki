@@ -13,7 +13,7 @@ interface WikiPageAssistantProps {
   onOpenFullChat?: () => void
 }
 
-function wikiPageChoices(
+export function getAvailableWikiPageChoices(
   projectPath: string,
   entries: Iterable<{ path: string }>,
   automaticPagePath: string | null,
@@ -30,6 +30,49 @@ export function getPageAssistantContextFiles(
   manualContextFiles: string[],
 ): string[] {
   return getWikiContextFiles(projectPath, automaticPagePath, manualContextFiles)
+}
+
+export interface WikiPageAssistantActions {
+  selectConversation: (id: string | null) => void
+  createConversation: () => void
+  addManualContextFile: (path: string) => void
+  removeManualContextFile: (path: string) => void
+  setWriteMode: (mode: "confirm" | "direct") => void
+  openFullChat: () => void
+}
+
+export function createWikiPageAssistantActions({
+  isStreaming,
+  manualContextFiles,
+  createConversation,
+  setActiveConversation,
+  setManualContextFiles,
+  setWikiWriteMode,
+  setActiveView,
+  onOpenFullChat,
+}: {
+  isStreaming: boolean
+  manualContextFiles: string[]
+  createConversation: () => string
+  setActiveConversation: (id: string | null) => void
+  setManualContextFiles: (paths: string[]) => void
+  setWikiWriteMode: (mode: "confirm" | "direct") => void
+  setActiveView: (view: "chat") => void
+  onOpenFullChat?: () => void
+}): WikiPageAssistantActions {
+  const blocked = () => isStreaming
+  return {
+    selectConversation: (id) => { if (!blocked()) setActiveConversation(id) },
+    createConversation: () => { if (!blocked()) createConversation() },
+    addManualContextFile: (path) => { if (!blocked()) setManualContextFiles([...manualContextFiles, path]) },
+    removeManualContextFile: (path) => { if (!blocked()) setManualContextFiles(manualContextFiles.filter((item) => item !== path)) },
+    setWriteMode: (mode) => { if (!blocked()) setWikiWriteMode(mode) },
+    openFullChat: () => {
+      if (blocked()) return
+      setActiveView("chat")
+      onOpenFullChat?.()
+    },
+  }
 }
 
 export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }: WikiPageAssistantProps) {
@@ -54,7 +97,7 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
   const writeMode = conversation?.wikiWriteMode ?? "confirm"
   const availablePages = useMemo(
     () => project
-      ? wikiPageChoices(
+      ? getAvailableWikiPageChoices(
         project.path,
         [...projectPathIndex.filesByName.values()].flat(),
         automaticPagePath,
@@ -64,10 +107,16 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
     [automaticPagePath, manualContextFiles, project, projectPathIndex],
   )
 
-  const handleOpenFullChat = () => {
-    setActiveView("chat")
-    onOpenFullChat?.()
-  }
+  const actions = createWikiPageAssistantActions({
+    isStreaming,
+    manualContextFiles,
+    createConversation,
+    setActiveConversation,
+    setManualContextFiles,
+    setWikiWriteMode,
+    setActiveView,
+    onOpenFullChat,
+  })
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -77,8 +126,8 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
           <span className="truncate text-sm font-semibold">Page assistant</span>
         </div>
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="xs" onClick={handleOpenFullChat}>Open full chat</Button>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close page assistant">
+          <Button type="button" variant="ghost" size="xs" onClick={actions.openFullChat} disabled={isStreaming}>Open full chat</Button>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} disabled={isStreaming} aria-label="Close page assistant">
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -89,14 +138,14 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
           <select
             aria-label="Conversation"
             value={activeConversationId ?? ""}
-            onChange={(event) => setActiveConversation(event.target.value || null)}
+            onChange={(event) => actions.selectConversation(event.target.value || null)}
             disabled={isStreaming}
             className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-xs outline-none disabled:opacity-50"
           >
             <option value="">No conversation</option>
             {conversations.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
           </select>
-          <Button type="button" variant="outline" size="xs" onClick={() => createConversation()} disabled={isStreaming}>New chat</Button>
+          <Button type="button" variant="outline" size="xs" onClick={actions.createConversation} disabled={isStreaming}>New chat</Button>
         </div>
 
         <div className="space-y-1.5">
@@ -115,7 +164,7 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
                   type="button"
                   aria-label={`Remove ${getFileName(path)}`}
                   disabled={isStreaming}
-                  onClick={() => setManualContextFiles(manualContextFiles.filter((item) => item !== path))}
+                  onClick={() => actions.removeManualContextFile(path)}
                   className="rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
                 >
                   <X className="h-3 w-3" />
@@ -132,7 +181,7 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
                 disabled={isStreaming}
                 onChange={(event) => {
                   const path = event.target.value
-                  if (path) setManualContextFiles([...manualContextFiles, path])
+                  if (path) actions.addManualContextFile(path)
                   event.target.value = ""
                 }}
                 className="min-w-0 flex-1 rounded border bg-background px-1.5 py-1 text-xs outline-none disabled:opacity-50"
@@ -150,7 +199,7 @@ export function WikiPageAssistant({ automaticPagePath, onClose, onOpenFullChat }
           <select
             aria-label="Write mode"
             value={writeMode}
-            onChange={(event) => setWikiWriteMode(event.target.value as "confirm" | "direct")}
+            onChange={(event) => actions.setWriteMode(event.target.value as "confirm" | "direct")}
             disabled={isStreaming || !activeConversationId}
             className="min-w-0 flex-1 rounded border bg-background px-1.5 py-1 text-xs outline-none disabled:opacity-50"
           >

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { MessageSquare } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useChatStore } from "@/stores/chat-store"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { getWikiContextFiles } from "@/lib/wiki-page-context"
 import { IconSidebar } from "./icon-sidebar"
@@ -13,8 +14,7 @@ import { WikiPageAssistant } from "@/components/chat/wiki-page-assistant"
 import { useResearchStore } from "@/stores/research-store"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { getAppLayoutVisibility } from "./app-layout-visibility"
-
-type RightPanel = "research" | "assistant" | "none"
+import { syncRightPanelWithResearch, type RightPanel } from "./app-layout-right-panel"
 
 interface AppLayoutProps {
   onSwitchProject: () => void
@@ -24,6 +24,7 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const project = useWikiStore((s) => s.project)
   const activeView = useWikiStore((s) => s.activeView)
   const selectedFile = useWikiStore((s) => s.selectedFile)
+  const isStreaming = useChatStore((s) => s.isStreaming)
   const researchPanelOpen = useResearchStore((s) => s.panelOpen)
   const setResearchPanelOpen = useResearchStore((s) => s.setPanelOpen)
   const [rightPanel, setRightPanel] = useState<RightPanel>(() => researchPanelOpen ? "research" : "none")
@@ -34,9 +35,8 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (researchPanelOpen) setRightPanel("research")
-    else setRightPanel((current) => current === "research" ? "none" : current)
-  }, [researchPanelOpen])
+    setRightPanel((current) => syncRightPanelWithResearch(current, researchPanelOpen, isStreaming))
+  }, [researchPanelOpen, isStreaming])
 
   const loadFileTree = useCallback(async () => {
     if (!project) return

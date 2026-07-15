@@ -4,6 +4,7 @@ import {
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useResearchStore } from "@/stores/research-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
@@ -35,6 +36,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const { t } = useTranslation()
   const activeView = useWikiStore((s) => s.activeView)
   const setActiveView = useWikiStore((s) => s.setActiveView)
+  const isStreaming = useChatStore((s) => s.isStreaming)
   const pendingCount = useReviewStore((s) => s.items.filter((i) => !i.resolved).length)
   const researchPanelOpen = useResearchStore((s) => s.panelOpen)
   const researchActiveCount = useResearchStore((s) => s.tasks.filter((t) => t.status !== "done" && t.status !== "error").length)
@@ -66,6 +68,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   }, [])
 
   function handleResearchPanelToggle() {
+    if (isStreaming) return
     const next = nextResearchPanelNavState(activeView, researchPanelOpen)
     if (next.activeView !== activeView) setActiveView(next.activeView)
     toggleResearchPanel(next.researchPanelOpen)
@@ -87,7 +90,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => (
             <Tooltip key={view}>
               <TooltipTrigger
-                onClick={() => setActiveView(view)}
+                onClick={() => { if (!isStreaming) setActiveView(view) }}
+                disabled={isStreaming}
                 className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                   activeView === view
                     ? "bg-accent text-accent-foreground"
@@ -111,6 +115,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           <Tooltip>
             <TooltipTrigger
               onClick={handleResearchPanelToggle}
+              disabled={isStreaming}
               className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 isResearchPanelVisible(activeView, researchPanelOpen)
                   ? "bg-accent text-accent-foreground"
@@ -128,7 +133,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
-              onClick={() => setActiveView("skills")}
+              onClick={() => { if (!isStreaming) setActiveView("skills") }}
+              disabled={isStreaming}
               className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 activeView === "skills"
                   ? "bg-accent text-accent-foreground"
@@ -163,7 +169,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
-              onClick={() => setActiveView("settings")}
+              onClick={() => { if (!isStreaming) setActiveView("settings") }}
+              disabled={isStreaming}
               className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 activeView === "settings"
                   ? "bg-accent text-accent-foreground"
@@ -194,7 +201,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
-              onClick={onSwitchProject}
+              onClick={() => { if (!isStreaming) onSwitchProject() }}
+              disabled={isStreaming}
               className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
             >
               <ArrowLeftRight className="h-5 w-5" />

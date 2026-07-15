@@ -152,4 +152,4 @@ npm run tauri dev
 
 - `docs/superpowers/specs/2026-07-14-wiki-page-assistant-design.md` 已更新为“已实施并验证”。
 - 已按计划暂存仅限 Task 5 文件并运行 `git commit -m "feat: localize wiki page assistant"`。
-- Commit SHA：`e50ba3165b8dbbb4419249312ea66c491c2755f6`。
+- Commit SHA：`3e191ced5b037bc3dff8c078b100f72e97150d05`。

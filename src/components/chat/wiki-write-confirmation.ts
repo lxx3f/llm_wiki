@@ -27,32 +27,48 @@ export async function confirmPendingWikiWrite({
   projectPath,
   sessionId,
   confirm,
-  refresh,
-  selectedFile,
-  read,
-  setFileContent,
 }: {
   pendingWrite: ChatPendingWikiWrite
   projectId: string
   projectPath: string
   sessionId: string | null
   confirm: (projectId: string, sessionId: string | null, pendingWriteId: string) => Promise<AgentConfirmedWikiWrite>
-  refresh: (projectPath: string, options: { bumpDataVersion: boolean }) => Promise<void>
-  selectedFile: string | null
-  read: (path: string) => Promise<string>
-  setFileContent: (content: string) => void
 }) {
   const confirmed = await confirm(projectId, sessionId, pendingWrite.id)
-  const path = confirmedProjectPath(projectPath, confirmed.reference.path)
-  await refresh(projectPath, { bumpDataVersion: true })
-  if (isConfirmedWriteForSelectedFile(selectedFile, path)) {
-    setFileContent(await read(path))
-  }
-
   return {
-    path,
+    path: confirmedProjectPath(projectPath, confirmed.reference.path),
     content: pendingWrite.content,
     existedBefore: confirmed.existedBefore,
+  }
+}
+
+export async function refreshConfirmedWikiWrite({
+  projectPath,
+  confirmedPath,
+  refresh,
+  getSelectedFile,
+  read,
+  setFileContent,
+  onError = (error) => console.error("Failed to refresh confirmed wiki write:", error),
+}: {
+  projectPath: string
+  confirmedPath: string
+  refresh: (projectPath: string, options: { bumpDataVersion: boolean }) => Promise<void>
+  getSelectedFile: () => string | null
+  read: (path: string) => Promise<string>
+  setFileContent: (content: string) => void
+  onError?: (error: unknown) => void
+}): Promise<void> {
+  try {
+    await refresh(projectPath, { bumpDataVersion: true })
+    if (!isConfirmedWriteForSelectedFile(getSelectedFile(), confirmedPath)) return
+
+    const content = await read(confirmedPath)
+    if (isConfirmedWriteForSelectedFile(getSelectedFile(), confirmedPath)) {
+      setFileContent(content)
+    }
+  } catch (error) {
+    onError(error)
   }
 }
 

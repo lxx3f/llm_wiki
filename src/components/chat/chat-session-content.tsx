@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles, type ChatReferencePreview } from "./chat-message"
 import { ChatInput, type ChatSendOptions } from "./chat-input"
 import { ConversationSidebar } from "./conversation-sidebar"
-import { cancelPendingWikiWrite, confirmPendingWikiWrite } from "./wiki-write-confirmation"
+import { cancelPendingWikiWrite, confirmPendingWikiWrite, refreshConfirmedWikiWrite } from "./wiki-write-confirmation"
 import { useChatStore, chatMessagesToLLM, type MessageImage, type MessageReference } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { isReasoningOnlyResponseError, streamChat } from "@/lib/llm-client"
@@ -1274,10 +1274,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       projectPath: project.path,
       sessionId: activeConversationId,
       confirm: (projectId, sessionId, pendingWriteId) => invoke("agent_confirm_wiki_write", { projectId, sessionId, pendingWriteId }),
-      refresh: refreshProjectFileTree,
-      selectedFile: useWikiStore.getState().selectedFile,
-      read: readFile,
-      setFileContent: useWikiStore.getState().setFileContent,
     })
     useChatStore.setState((state) => ({
       messages: state.messages.map((message) => message.id === messageId
@@ -1285,6 +1281,14 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
         : message),
     }))
     onConfirmedWrite?.()
+    void refreshConfirmedWikiWrite({
+      projectPath: project.path,
+      confirmedPath: confirmed.path,
+      refresh: refreshProjectFileTree,
+      getSelectedFile: () => useWikiStore.getState().selectedFile,
+      read: readFile,
+      setFileContent: useWikiStore.getState().setFileContent,
+    })
   }, [activeConversationId, onConfirmedWrite, project])
 
   const handleCancelPendingWikiWrite = useCallback((messageId: string) => {

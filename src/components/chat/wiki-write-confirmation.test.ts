@@ -3,6 +3,7 @@ import {
   cancelPendingWikiWrite,
   confirmPendingWikiWrite,
   isConfirmedWriteForSelectedFile,
+  refreshConfirmedWikiWrite,
 } from "./wiki-write-confirmation"
 
 const pending = {
@@ -19,23 +20,18 @@ describe("Wiki write confirmation", () => {
     expect(confirm).not.toHaveBeenCalled()
   })
 
-  it("confirms with the pending ID, refreshes the tree, and uses staged content for the file activity", async () => {
+  it("confirms with the pending ID and uses staged content for the file activity", async () => {
     const confirm = vi.fn().mockResolvedValue({
       reference: { path: "wiki/page.md" },
       existedBefore: true,
       previousContent: "# Previous content",
     })
-    const refresh = vi.fn().mockResolvedValue(undefined)
     const result = await confirmPendingWikiWrite({
       pendingWrite: pending,
       projectId: "project-1",
       projectPath: "/project",
       sessionId: "session-1",
       confirm,
-      refresh,
-      selectedFile: null,
-      read: vi.fn(),
-      setFileContent: vi.fn(),
     })
 
     expect(confirm).toHaveBeenCalledOnce()
@@ -45,24 +41,16 @@ describe("Wiki write confirmation", () => {
       content: pending.content,
       existedBefore: true,
     })
-    expect(refresh).toHaveBeenCalledOnce()
-    expect(refresh).toHaveBeenCalledWith("/project", { bumpDataVersion: true })
   })
 
   it("refreshes a matching open editor using cross-platform normalized paths", async () => {
     const read = vi.fn().mockResolvedValue("fresh file")
     const setFileContent = vi.fn()
-    await confirmPendingWikiWrite({
-      pendingWrite: pending,
-      projectId: "project-1",
+    await refreshConfirmedWikiWrite({
       projectPath: "C:/project",
-      sessionId: "session-1",
-      confirm: vi.fn().mockResolvedValue({
-        reference: { path: "wiki/page.md" },
-        existedBefore: false,
-      }),
+      confirmedPath: "C:/project/wiki/page.md",
       refresh: vi.fn().mockResolvedValue(undefined),
-      selectedFile: "C:\\project\\wiki\\page.md",
+      getSelectedFile: () => "C:\\project\\wiki\\page.md",
       read,
       setFileContent,
     })
@@ -73,23 +61,86 @@ describe("Wiki write confirmation", () => {
     expect(setFileContent).toHaveBeenCalledWith("fresh file")
   })
 
-  it("does not refresh an editor for a different selected file", async () => {
+  it("does not read or overwrite the editor when the selected file changes during refresh", async () => {
+    let selectedFile: string | null = "/project/wiki/page.md"
+    const refresh = vi.fn().mockImplementation(async () => {
+      selectedFile = "/project/wiki/other.md"
+    })
     const read = vi.fn()
     const setFileContent = vi.fn()
-    await confirmPendingWikiWrite({
+
+    await refreshConfirmedWikiWrite({
+      projectPath: "/project",
+      confirmedPath: "/project/wiki/page.md",
+      refresh,
+      getSelectedFile: () => selectedFile,
+      read,
+      setFileContent,
+    })
+
+    expect(refresh).toHaveBeenCalledWith("/project", { bumpDataVersion: true })
+    expect(read).not.toHaveBeenCalled()
+    expect(setFileContent).not.toHaveBeenCalled()
+  })
+
+  it("does not overwrite the editor when the selected file changes while reading", async () => {
+    let selectedFile: string | null = "/project/wiki/page.md"
+    const read = vi.fn().mockImplementation(async () => {
+      selectedFile = "/project/wiki/other.md"
+      return "fresh file"
+    })
+    const setFileContent = vi.fn()
+
+    await refreshConfirmedWikiWrite({
+      projectPath: "/project",
+      confirmedPath: "/project/wiki/page.md",
+      refresh: vi.fn().mockResolvedValue(undefined),
+      getSelectedFile: () => selectedFile,
+      read,
+      setFileContent,
+    })
+
+    expect(read).toHaveBeenCalledOnce()
+    expect(setFileContent).not.toHaveBeenCalled()
+  })
+
+  it("retains confirmation success when tree refresh fails", async () => {
+    const confirmed = await confirmPendingWikiWrite({
       pendingWrite: pending,
       projectId: "project-1",
       projectPath: "/project",
       sessionId: "session-1",
       confirm: vi.fn().mockResolvedValue({ reference: { path: "wiki/page.md" }, existedBefore: true }),
-      refresh: vi.fn().mockResolvedValue(undefined),
-      selectedFile: "/project/wiki/other.md",
-      read,
-      setFileContent,
     })
+    const onError = vi.fn()
 
-    expect(read).not.toHaveBeenCalled()
-    expect(setFileContent).not.toHaveBeenCalled()
+    await expect(refreshConfirmedWikiWrite({
+      projectPath: "/project",
+      confirmedPath: confirmed.path,
+      refresh: vi.fn().mockRejectedValue(new Error("refresh failed")),
+      getSelectedFile: () => null,
+      read: vi.fn(),
+      setFileContent: vi.fn(),
+      onError,
+    })).resolves.toBeUndefined()
+
+    expect(confirmed).toMatchObject({ path: "/project/wiki/page.md", content: pending.content })
+    expect(onError).toHaveBeenCalledOnce()
+  })
+
+  it("retains confirmation success when refreshing the matching editor fails", async () => {
+    const onError = vi.fn()
+    await expect(refreshConfirmedWikiWrite({
+      projectPath: "/project",
+      confirmedPath: "/project/wiki/page.md",
+      refresh: vi.fn().mockResolvedValue(undefined),
+      getSelectedFile: () => "/project/wiki/page.md",
+      read: vi.fn().mockRejectedValue(new Error("read failed")),
+      setFileContent: vi.fn(),
+      onError,
+    })).resolves.toBeUndefined()
+
+    expect(onError).toHaveBeenCalledOnce()
   })
 
   it("compares confirmation and editor paths across slash conventions", () => {

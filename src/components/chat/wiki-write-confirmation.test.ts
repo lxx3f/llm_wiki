@@ -4,6 +4,7 @@ import {
   confirmPendingWikiWrite,
   isConfirmedWriteForSelectedFile,
   refreshConfirmedWikiWrite,
+  summarizeConfirmedWikiWrite,
 } from "./wiki-write-confirmation"
 
 const pending = {
@@ -40,6 +41,54 @@ describe("Wiki write confirmation", () => {
       path: "/project/wiki/page.md",
       content: pending.content,
       existedBefore: true,
+      previousContent: "# Previous content",
+    })
+  })
+
+  it("preserves confirmed overwrite history for diff display and undo", async () => {
+    const confirmed = await confirmPendingWikiWrite({
+      pendingWrite: { ...pending, content: "head\nnew\ntail" },
+      projectId: "project-1",
+      projectPath: "/project",
+      sessionId: "session-1",
+      confirm: vi.fn().mockResolvedValue({
+        reference: { path: "wiki/page.md" },
+        existedBefore: true,
+        previousContent: "head\nold\ntail",
+      }),
+    })
+    const change = summarizeConfirmedWikiWrite({ ...confirmed, id: pending.id, timestamp: 123 })
+
+    expect(change).toMatchObject({
+      id: pending.id,
+      path: "/project/wiki/page.md",
+      tool: "wiki.write",
+      operation: "modified",
+      additions: 1,
+      deletions: 1,
+      diff: "@@ -2,1 +2,1 @@\n-old\n+new",
+      beforeContent: "head\nold\ntail",
+      afterContent: "head\nnew\ntail",
+      timestamp: 123,
+    })
+  })
+
+  it("preserves creation rollback snapshots when the backend confirms a new page", () => {
+    const change = summarizeConfirmedWikiWrite({
+      id: pending.id,
+      path: "/project/wiki/new.md",
+      content: "new page",
+      existedBefore: false,
+      previousContent: undefined,
+      timestamp: 123,
+    })
+
+    expect(change).toMatchObject({
+      operation: "created",
+      additions: 1,
+      deletions: 0,
+      beforeContent: null,
+      afterContent: "new page",
     })
   })
 

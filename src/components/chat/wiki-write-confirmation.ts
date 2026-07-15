@@ -1,4 +1,5 @@
-import type { ChatPendingWikiWrite } from "@/lib/chat-agent-types"
+import type { ChatAgentFileChange, ChatPendingWikiWrite } from "@/lib/chat-agent-types"
+import { summarizeAgentFileChange } from "@/lib/agent-file-activity"
 import { isAbsolutePath, normalizePath } from "@/lib/path-utils"
 
 export type AgentConfirmedWikiWrite = {
@@ -21,6 +22,36 @@ export function isConfirmedWriteForSelectedFile(selectedFile: string | null, con
   return selectedFile !== null && normalizePath(selectedFile) === normalizePath(confirmedPath)
 }
 
+export type ConfirmedPendingWikiWrite = {
+  path: string
+  content: string
+  existedBefore: boolean
+  previousContent?: string
+}
+
+export function summarizeConfirmedWikiWrite(input: ConfirmedPendingWikiWrite & { id: string; timestamp?: number; diffUnavailable?: string }): ChatAgentFileChange {
+  const beforeContent = input.existedBefore ? input.previousContent : null
+  const beforeKnown = beforeContent !== undefined
+  const change = summarizeAgentFileChange({
+    id: input.id,
+    path: input.path,
+    tool: "wiki.write",
+    beforeContent: beforeKnown ? beforeContent : "",
+    afterContent: input.content,
+    timestamp: input.timestamp,
+  })
+
+  if (!beforeKnown) {
+    change.operation = "modified"
+    change.additions = 0
+    change.deletions = 0
+    change.diff = input.diffUnavailable ?? ""
+    change.beforeContent = undefined
+    change.afterContent = undefined
+  }
+  return change
+}
+
 export async function confirmPendingWikiWrite({
   pendingWrite,
   projectId,
@@ -39,6 +70,7 @@ export async function confirmPendingWikiWrite({
     path: confirmedProjectPath(projectPath, confirmed.reference.path),
     content: pendingWrite.content,
     existedBefore: confirmed.existedBefore,
+    previousContent: confirmed.previousContent,
   }
 }
 

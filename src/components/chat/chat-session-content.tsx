@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles, type ChatReferencePreview } from "./chat-message"
 import { ChatInput, type ChatSendOptions } from "./chat-input"
 import { ConversationSidebar } from "./conversation-sidebar"
-import { cancelPendingWikiWrite, confirmPendingWikiWrite, refreshConfirmedWikiWrite } from "./wiki-write-confirmation"
+import { cancelPendingWikiWrite, confirmPendingWikiWrite, refreshConfirmedWikiWrite, summarizeConfirmedWikiWrite } from "./wiki-write-confirmation"
 import { useChatStore, chatMessagesToLLM, type MessageImage, type MessageReference } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { isReasoningOnlyResponseError, streamChat } from "@/lib/llm-client"
@@ -1275,9 +1275,15 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       sessionId: activeConversationId,
       confirm: (projectId, sessionId, pendingWriteId) => invoke("agent_confirm_wiki_write", { projectId, sessionId, pendingWriteId }),
     })
+    const change = summarizeConfirmedWikiWrite({
+      ...confirmed,
+      id: pendingWrite.id,
+      timestamp: Date.now(),
+      diffUnavailable: t("chat.agentChanges.diffUnavailable"),
+    })
     useChatStore.setState((state) => ({
       messages: state.messages.map((message) => message.id === messageId
-        ? { ...message, pendingWikiWrite: undefined, agentFileChanges: [...(message.agentFileChanges ?? []), { id: pendingWrite.id, path: confirmed.path, tool: "wiki.write", operation: confirmed.existedBefore ? "modified" : "created", additions: confirmed.content.split(String.fromCharCode(10)).length, deletions: 0, diff: "", timestamp: Date.now() }] }
+        ? { ...message, pendingWikiWrite: undefined, agentFileChanges: [...(message.agentFileChanges ?? []), change] }
         : message),
     }))
     onConfirmedWrite?.()

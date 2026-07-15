@@ -314,10 +314,11 @@ function conversationMessages(conversationId: string) {
 export interface ChatSessionContentProps {
   contextFiles: string[]
   showConversationControls?: boolean
+  wikiWriteMode?: "confirm" | "direct"
   onConfirmedWrite?: () => void
 }
 
-export function ChatSessionContent({ contextFiles, showConversationControls = false, onConfirmedWrite }: ChatSessionContentProps) {
+export function ChatSessionContent({ contextFiles, showConversationControls = false, wikiWriteMode = "confirm", onConfirmedWrite }: ChatSessionContentProps) {
   const { t } = useTranslation()
   useSourceFiles() // Keep source file cache warm
   const activeConversationId = useChatStore((s) => s.activeConversationId)
@@ -383,7 +384,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   const [referencePreviewWidth, setReferencePreviewWidth] = useState(420)
   const [availableSkills, setAvailableSkills] = useState<AvailableAgentSkill[]>([])
   const [approvingShellMessageId, setApprovingShellMessageId] = useState<string | null>(null)
-  const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null)
   const buildGeneratedOutputPreview = useCallback(async (ref: MessageReference): Promise<ChatReferencePreview | null> => {
     if (!project) return null
     const outputPath = projectAbsolutePath(project.path, ref.path)
@@ -434,7 +434,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       })
     }
   }, [buildGeneratedOutputPreview, project])
-  const activeStreaming = Boolean(isStreaming && activeConversationId && streamingConversationId === activeConversationId)
+  const activeStreaming = Boolean(isStreaming && activeConversationId)
   const activeAgentEvents = activeStreaming ? agentEvents : []
   const lastMessage = activeMessages[activeMessages.length - 1]
   const latestGeneratedOutputMessage = [...activeMessages]
@@ -576,14 +576,18 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       images: MessageImage[] = [],
       options?: InternalChatSendOptions,
     ) => {
-      const sendOptions = options ?? {
-        useWebSearch: useChatStore.getState().useWebSearch,
-        useAnyTxtSearch: useChatStore.getState().useAnyTxtSearch,
-        agentMode: useChatStore.getState().agentMode,
-        retrievalMode: useChatStore.getState().retrievalMode,
-        skills: useChatStore.getState().selectedSkills,
-        contextFiles,
-        skillMode: useChatStore.getState().selectedSkills.length > 0 ? "explicit" : "auto",
+      if (useChatStore.getState().isStreaming) return
+      const sendOptions = {
+        ...(options ?? {
+          useWebSearch: useChatStore.getState().useWebSearch,
+          useAnyTxtSearch: useChatStore.getState().useAnyTxtSearch,
+          agentMode: useChatStore.getState().agentMode,
+          retrievalMode: useChatStore.getState().retrievalMode,
+          skills: useChatStore.getState().selectedSkills,
+          contextFiles,
+          skillMode: useChatStore.getState().selectedSkills.length > 0 ? "explicit" : "auto",
+        }),
+        wikiWriteMode: options?.wikiWriteMode ?? wikiWriteMode,
       }
       const allowedSkills = enabledSkillIds(
         availableSkills,
@@ -607,7 +611,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           : []
         addMessageToConversation(convId, "user", text, images, messageContextFiles)
       }
-      setStreamingConversationId(convId)
       setStreaming(true)
       setAgentEvents([])
       let finalized = false
@@ -900,7 +903,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             autoOpenSingleGeneratedOutput(convId, references)
           }
           setAgentEvents([])
-          setStreamingConversationId(null)
           abortRef.current = null
           activeRunSessionIdRef.current = null
           activeRunIdRef.current = null
@@ -974,7 +976,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             backendResponse.userInputRequest,
           )
           setAgentEvents([])
-          setStreamingConversationId(null)
           abortRef.current = null
           activeRunSessionIdRef.current = null
           activeRunIdRef.current = null
@@ -1077,7 +1078,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
         if (pendingWikiWrite) addPendingWikiWriteToMessage(convId, pendingWikiWrite)
         autoOpenSingleGeneratedOutput(convId, backendReferences)
         setAgentEvents([])
-        setStreamingConversationId(null)
         abortRef.current = null
         activeRunSessionIdRef.current = null
         activeRunIdRef.current = null
@@ -1087,8 +1087,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           if (isAbortLikeError(err) || runIdRef.current !== runId) {
             setStreaming(false)
             setAgentEvents([])
-            setStreamingConversationId(null)
-            abortRef.current = null
+              abortRef.current = null
             activeRunSessionIdRef.current = null
             activeRunIdRef.current = null
             return
@@ -1096,14 +1095,13 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           const message = err instanceof Error ? err.message : String(err)
           finalizeStreamForConversation(convId, `Error: ${message}`, undefined)
           setAgentEvents([])
-          setStreamingConversationId(null)
         }
         abortRef.current = null
         activeRunSessionIdRef.current = null
         activeRunIdRef.current = null
       }
     },
-    [project, llmConfig, searchApiConfig, addMessageToConversation, setStreaming, appendStreamToken, finalizeStreamForConversation, createConversation, maxHistoryMessages, t, availableSkills, autoOpenSingleGeneratedOutput],
+    [project, llmConfig, searchApiConfig, addMessageToConversation, setStreaming, appendStreamToken, finalizeStreamForConversation, createConversation, maxHistoryMessages, t, availableSkills, autoOpenSingleGeneratedOutput, wikiWriteMode],
   )
 
   const handleStop = useCallback(() => {
@@ -1123,7 +1121,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     activeRunIdRef.current = null
     setStreaming(false)
     setAgentEvents([])
-    setStreamingConversationId(null)
   }, [project, setStreaming])
 
   const handleNewConversation = useCallback(() => {

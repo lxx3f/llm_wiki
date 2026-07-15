@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles, type ChatReferencePreview } from "./chat-message"
 import { ChatInput, type ChatSendOptions } from "./chat-input"
 import { ConversationSidebar } from "./conversation-sidebar"
+import { cancelPendingWikiWrite, confirmPendingWikiWrite } from "./wiki-write-confirmation"
 import { useChatStore, chatMessagesToLLM, type MessageImage, type MessageReference } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { isReasoningOnlyResponseError, streamChat } from "@/lib/llm-client"
@@ -1267,22 +1268,27 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
 
   const handleConfirmPendingWikiWrite = useCallback(async (messageId: string, pendingWrite: ChatPendingWikiWrite) => {
     if (!project) return
-    const confirmed = await invoke<{ path: string; content: string; existedBefore: boolean }>("agent_confirm_wiki_write", {
+    const confirmed = await confirmPendingWikiWrite({
+      pendingWrite,
       projectId: project.id,
+      projectPath: project.path,
       sessionId: activeConversationId,
-      pendingWriteId: pendingWrite.id,
+      confirm: (projectId, sessionId, pendingWriteId) => invoke("agent_confirm_wiki_write", { projectId, sessionId, pendingWriteId }),
+      refresh: refreshProjectFileTree,
+      selectedFile: useWikiStore.getState().selectedFile,
+      read: readFile,
+      setFileContent: useWikiStore.getState().setFileContent,
     })
     useChatStore.setState((state) => ({
       messages: state.messages.map((message) => message.id === messageId
         ? { ...message, pendingWikiWrite: undefined, agentFileChanges: [...(message.agentFileChanges ?? []), { id: pendingWrite.id, path: confirmed.path, tool: "wiki.write", operation: confirmed.existedBefore ? "modified" : "created", additions: confirmed.content.split(String.fromCharCode(10)).length, deletions: 0, diff: "", timestamp: Date.now() }] }
         : message),
     }))
-    await refreshProjectFileTree(project.path, { bumpDataVersion: true })
     onConfirmedWrite?.()
   }, [activeConversationId, onConfirmedWrite, project])
 
   const handleCancelPendingWikiWrite = useCallback((messageId: string) => {
-    useChatStore.setState((state) => ({ messages: state.messages.map((message) => message.id === messageId ? { ...message, pendingWikiWrite: undefined } : message) }))
+    useChatStore.setState((state) => ({ messages: cancelPendingWikiWrite(state.messages, messageId) }))
   }, [])
 
   const handleWriteToWiki = useCallback(async () => {

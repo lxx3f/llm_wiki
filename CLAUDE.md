@@ -118,6 +118,16 @@ Wiki 写入受控覆盖：会话级 `WikiWriteMode`（`confirm` / `direct`）随
 
 `mcp-server/src/api-client.ts` 和 `mcp-server/src/index.ts` 只映射上述 API。新增 MCP tool 时，先在 Rust API 中提供能力，再在这两个文件中增加客户端方法与 tool。API token 通过环境变量传递，不要放进命令行参数。
 
+### 外部 MCP Client（MiniMax Token Plan 等）
+
+LLM Wiki 同时作为 **外部 MCP 的 client**：在 Settings → External MCP 添加 stdio 服务后，Rust Agent 会把发现到的工具以稳定名 `mcp.<server-id>.<tool>` 与 builtin 工具并列暴露给模型。
+
+- 配置 / 持久化：`src/lib/external-mcp-config.ts`、`src/stores/wiki-store.ts`、`src/lib/project-store.ts`、`src/components/settings/sections/external-mcp-section.tsx`；持久化键为 `externalMcpConfig`，独立于 `apiConfig.mcpEnabled`。
+- Rust 实现：`src-tauri/src/agent/mcp_client.rs`（`McpClientSession`、`McpStdioClientConfig`、`ExternalMcpRuntimeConfig`）；`agent/runtime.rs` 启动时为每个 enabled server 创建独立会话、把工具注入 prompt、并把 `mcp.*` 调用分流到对应 session。
+- 调用约束：`Cargo.toml` 增加 `rmcp 2.2` 的 `client + transport-child-process`；不要自行实现 JSON-RPC；不要把 API key 写进 `args`，只能从 `environment` 注入；不要把密钥写入日志/会话/event；超时与输出截断使用每个 server 的 `limits`。
+- 测试：`src-tauri/tests/fixtures/mock_mcp_server.py` 是可在 stdio 上跑 `initialize/list/call` 的 Python fixture；agent/mcp_client 模块的 7 个单元/集成测试当前全部通过。
+- 设计文档：`docs/superpowers/specs/2026-07-16-external-mcp-and-ui-ux.md`。
+
 ## 关键代码约束
 
 - **跨平台路径**：持久化路径和 IPC payload 使用 `/`。复用 `src/lib/path-utils.ts` 的 `normalizePath`、`joinPath` 和 `isAbsolutePath`；不要用仅检查 `/` 开头的逻辑判断绝对路径，否则 Windows drive/UNC 路径会被错误二次拼接。

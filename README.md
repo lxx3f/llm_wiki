@@ -48,6 +48,9 @@
 - **Mermaid Diagram Rendering** — render Mermaid code blocks directly in chat and preview, with compact syntax-error cards instead of raw parser output
 - **Async Review System** — LLM flags items for human judgment, predefined actions, pre-generated search queries
 - **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
+- **External MCP Client** — connect LLM Wiki to local stdio MCP servers (e.g. the bundled **MiniMax Token Plan** template that calls `uvx minimax-coding-plan-mcp -y`); discovered tools surface in the Agent as stable `mcp.<server>.<tool>` names alongside the built-in registry with per-run session lifecycle, timeout-bounded requests, output truncation, and child reaping
+- **Live Search & Wiki Quick Search** — the Search view now debounces results as you type (300 ms) with stale-response filtering; the Wiki preview header hosts an inline quick search that opens the top suggestion on Enter and falls through to the full Search view when no result matches
+- **In-editor Wiki Page Delete** — the Wiki editor toolbar gains a destructive Delete button next to Link / Edit; deletions are gated to files inside `<project>/wiki/`, refresh the file tree on success, and close the preview
 - **Local HTTP API + MCP Server + AI Agent Skill** — built-in `127.0.0.1:19828` JSON API and bundled MCP server for hybrid search, file read, graph traversal, and source rescan; ready-made [agent skill](https://github.com/nashsu/llm_wiki_skill) installs into Claude Code / Codex with one command (`npx skills add …`)
 
 ## What is this?
@@ -447,6 +450,17 @@ LLM Wiki ships a built-in local HTTP API at `http://127.0.0.1:19828` (token-prot
 Enable the API, generate a token, and choose whether local unauthenticated access is allowed in **Settings → API + MCP**.
 
 For MCP-compatible clients, LLM Wiki also includes a local MCP server in `mcp-server/`. After building it with `npm run mcp:build`, **Settings → API + MCP** shows a copyable MCP client configuration with the correct local path for your machine. The MCP tools call the same API surface, so agent clients can list projects, read files, export unresolved Review items, run hybrid search, inspect the graph, trigger source rescans, and call the same Rust backend Agent chat endpoint without custom HTTP glue code.
+
+### Connect to external MCP servers (MiniMax Token Plan + more)
+
+LLM Wiki can also **act as an MCP client** itself. Add a `stdio` server in **Settings → External MCP** to expose any local Model Context Protocol server's tools directly to the Agent.
+
+- **MiniMax Token Plan template**: one click populates `command: uvx`, `args: ["minimax-coding-plan-mcp", "-y"]`, and the `MINIMAX_API_KEY` / `MINIMAX_API_HOST` environment variables. After `uvx` is on `PATH` and the template is enabled, the Agent can call `mcp.minimax_token_plan.web_search` alongside its built-in tools.
+- **Custom stdio servers**: any local MCP-compatible binary works. Set `command`, `args`, `workingDirectory`, per-server `timeoutMs` and `outputCharLimit`.
+- **Risk-aware enablement**: every enabled server displays a confirmation dialog noting that *all* discovered tools become automatically callable by the Agent and that secret environment values are stored with the rest of the app settings.
+- **Per-run sessions**: each Agent run spawns, initializes, lists tools, then tears down its MCP child processes — there is no shared state across runs.
+
+See [`docs/superpowers/specs/2026-07-16-external-mcp-and-ui-ux.md`](docs/superpowers/specs/2026-07-16-external-mcp-and-ui-ux.md) for the request flow, safety boundaries, and follow-up work.
 
 ### Plug your AI agent in with one command
 

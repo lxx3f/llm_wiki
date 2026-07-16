@@ -26,6 +26,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.5",
+    date: "2026-07-16",
+    highlights: {
+      en: [
+        "External MCP Client: LLM Wiki can act as an MCP client and connect to local stdio MCP servers (e.g. the MiniMax Token Plan template `uvx minimax-coding-plan-mcp -y`). Discoveries are exposed to the Agent as stable `mcp.<server>.<tool>` names alongside the builtin registry, with per-run sessions, timeout-bounded requests, output truncation and child reaping.",
+        "New Settings category 'External MCP' with a MiniMax Token Plan template, custom stdio server editor, risk-confirming enable toggle, environment variable entry, and per-server limits; credentials persist with the app settings and are only delivered through child environment variables.",
+        "Search view: live debounce (300 ms) with Enter-to-fire; stale in-flight responses are filtered out by a per-query token so a slow network request never overwrites a fresher keystroke.",
+        "Wiki preview header now hosts an inline quick search (also debounced at 300 ms) which lists up to eight pages with token highlighting, opens the first result on Enter, and falls through to the full Search view when no suggestion matches.",
+        "Wiki Editor right toolbar gains a Delete button next to Link / Edit. Clicking opens an in-editor confirmation dialog; the handler restricts deletion to files inside the project's `wiki/` folder, refreshes the file tree on success, and closes the preview.",
+        "`commands/fs::delete_file` IPC wrapper now enforces an absolute-path argument before forwarding, matching the rest of the filesystem API surface.",
+      ],
+      zh: [
+        "外部 MCP Client：LLM Wiki 现在可以作为 MCP client 连接本地 stdio MCP 服务（如 MiniMax Token Plan 模板 `uvx minimax-coding-plan-mcp -y`）。发现到的工具以稳定的 `mcp.<server>.<tool>` 名称与 Agent 内置工具并列暴露，每个 run 独立会话，调用统一超时、输出截断并自动回收子进程。",
+        "Settings 新增「外部 MCP」分类：内置 MiniMax Token Plan 模板、可自定义 stdio 服务、明确风险确认的启用开关、环境变量编辑和单服务限制面板；密钥仅通过子进程环境变量传递，并保持本应用原有的明文持久化策略。",
+        "Search 视图改为输入实时搜索：300ms debounce，Enter 立即触发；每次请求带 token，慢响应不会覆盖更新输入。",
+        "Wiki 预览顶部新增快速搜索框（同样 300ms debounce），最多展示 8 条带 token 高亮的页面建议，Enter 打开第一条；无匹配时自动跳转到完整 Search 视图。",
+        "Wiki 编辑器右上角工具栏增加「删除」按钮（位于链接 / 编辑之间）。点击弹出编辑器内确认对话框；处理器限制只能删除当前项目 `wiki/` 下的文件，成功后刷新文件树并关闭预览。",
+        "`commands/fs::delete_file` 的 IPC 封装在转发前强制校验路径必须是绝对路径，与其它文件系统接口保持一致。",
+      ],
+    },
+  },
+  {
     version: "0.6.4",
     date: "2026-07-15",
     highlights: {

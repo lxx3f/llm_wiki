@@ -1724,6 +1724,7 @@ fn handle_chat(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
         runtime_config.llm,
         runtime_config.web_search,
         runtime_config.anytxt,
+        runtime_config.external_mcp,
         app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
     );
     let user_message_for_session = req.message.clone();
@@ -1800,6 +1801,7 @@ struct AgentRuntimeConfig {
     llm: Option<agent::provider::LlmConfig>,
     web_search: Option<agent::tools::WebSearchConfig>,
     anytxt: Option<agent::tools::AnyTxtConfig>,
+    external_mcp: Option<agent::mcp_client::ExternalMcpRuntimeConfig>,
 }
 
 fn load_agent_runtime_config(app: &AppHandle) -> AgentRuntimeConfig {
@@ -1822,6 +1824,10 @@ fn load_agent_runtime_config(app: &AppHandle) -> AgentRuntimeConfig {
         anytxt: parsed
             .get("searchApiConfig")
             .and_then(|value| value.get("anyTxt"))
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
+        external_mcp: parsed
+            .get("externalMcpConfig")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok()),
     }

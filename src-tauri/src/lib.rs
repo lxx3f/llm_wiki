@@ -110,6 +110,7 @@ async fn agent_start_turn(
         runtime_config.llm,
         runtime_config.web_search,
         runtime_config.anytxt,
+        runtime_config.external_mcp,
         app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
     );
     let user_message = request.message.clone();
@@ -230,6 +231,7 @@ async fn agent_start_turn_stream(
         runtime_config.llm,
         runtime_config.web_search,
         runtime_config.anytxt,
+        runtime_config.external_mcp,
         app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
     );
     let app_for_task = app.clone();

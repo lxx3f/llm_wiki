@@ -234,6 +234,12 @@
       "deep": "深度",
       "localFirst": "本地优先"
     },
+    "agentModeDescriptions": {
+      "fast": "最多 6 步工具调用（启用技能时 12 步）。只需一次检索或简短写入时使用。",
+      "standard": "最多 16 步工具调用（启用技能时 28 步）。典型 wiki 任务（检索 → 读取 → 撰写）的均衡预算。",
+      "deep": "最多 24 步工具调用（启用技能时 36 步）。用于从原始资料撰写多页等长链路任务。",
+      "localFirst": "最多 16 步工具调用（启用技能时 28 步）。与标准模式同等预算，但优先走本地 LLM。"
+    },
     "enableAnyTxtInSettings": "请在设置 → 外部信息源中启用 AnyTXT",
     "sendMessage": "发送消息",
     "stopGeneration": "停止生成",
@@ -385,7 +391,9 @@
         "closeMinimize": "隐藏窗口",
         "closeMinimizeHint": "关闭窗口时让 LLM Wiki 留在后台运行。在 macOS 上这符合红色关闭按钮的常规行为；如果 Linux 托盘不可用，会最小化窗口而不是隐藏。",
         "closeExit": "退出应用",
-        "closeExitHint": "关闭窗口时立即退出 LLM Wiki。"
+        "closeExitHint": "关闭窗口时立即退出 LLM Wiki。",
+        "unlimitedAgentIterations": "取消 Agent 工具调用步数上限（高级用户）",
+        "unlimitedAgentIterationsHint": "允许单次 Agent 轮次最多进行约 200 次工具调用,不受模式限制。适用于一次撰写多个 wiki 页面的长任务。流式空闲超时和停止按钮仍然生效,所以即使模型失控也可以安全中断。"
       },
       "skills": {
         "title": "Skills",

@@ -90,8 +90,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => (
             <Tooltip key={view}>
               <TooltipTrigger
-                onClick={() => { if (!isStreaming) setActiveView(view) }}
-                disabled={isStreaming}
+                onClick={() => setActiveView(view)}
                 className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                   activeView === view
                     ? "bg-accent text-accent-foreground"
@@ -133,8 +132,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
-              onClick={() => { if (!isStreaming) setActiveView("skills") }}
-              disabled={isStreaming}
+              onClick={() => setActiveView("skills")}
               className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 activeView === "skills"
                   ? "bg-accent text-accent-foreground"
@@ -169,8 +167,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
-              onClick={() => { if (!isStreaming) setActiveView("settings") }}
-              disabled={isStreaming}
+              onClick={() => setActiveView("settings")}
               className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 activeView === "settings"
                   ? "bg-accent text-accent-foreground"
@@ -201,8 +198,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger
-              onClick={() => { if (!isStreaming) onSwitchProject() }}
-              disabled={isStreaming}
+              onClick={() => onSwitchProject()}
               className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
             >
               <ArrowLeftRight className="h-5 w-5" />

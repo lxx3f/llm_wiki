@@ -36,7 +36,13 @@ const DEFAULT_CHAT_SEARCH_RESULTS: usize = 5;
 const MAX_CHAT_SEARCH_RESULTS: usize = 10;
 const MAX_IMAGES_PER_TURN: usize = 5;
 const MAX_IMAGE_BASE64_BYTES: usize = 7 * 1024 * 1024;
-const MAX_AGENT_TOOL_ITERATIONS: usize = 8;
+const MAX_AGENT_TOOL_ITERATIONS: usize = 16;
+// Upper bound for users who opt into "unlimited" iterations. This is not
+// truly infinite — a misbehaving model that loops forever still gets
+// stopped by the stream idle timeout (8min / 15min with skills) or the
+// Stop button. 200 is large enough for a multi-page wiki generation
+// session while still allowing progress reporting every few iterations.
+const MAX_UNLIMITED_AGENT_ITERATIONS: usize = 200;
 const AGENT_STRUCTURED_MAX_TOKENS: u32 = 8192;
 const AGENT_SKILL_STRUCTURED_MAX_TOKENS: u32 = 16384;
 const MAX_SKILL_REFERENCE_BYTES: u64 = 256 * 1024;
@@ -1401,7 +1407,11 @@ impl AgentRuntime {
         let mut last_prompt_chars = 0usize;
         let has_explicit_skills =
             request.skill_mode == AgentSkillMode::Explicit && !skills.is_empty();
-        let max_iterations = agent_loop_iteration_budget(request.mode, has_explicit_skills);
+        let max_iterations = agent_loop_iteration_budget(
+            request.mode,
+            has_explicit_skills,
+            request.allow_unlimited_iterations,
+        );
         let retrieval_budget =
             agent_loop_retrieval_budget(request.mode, request.retrieval_mode, has_explicit_skills);
 
@@ -1601,6 +1611,30 @@ impl AgentRuntime {
             }
 
             if action.action.eq_ignore_ascii_case("final") {
+                let answer_text = action
+                    .answer
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default();
+                // Some models (especially after the "Converge quickly" prompt
+                // guidance) return a natural-language plan as `final.answer`
+                // without ever issuing a tool call. The chat session would then
+                // display the plan as the assistant's only message and stop,
+                // looking like a single-step bug. Force another iteration so
+                // the model actually executes a tool JSON action.
+                if observations.is_empty()
+                    && !answer_text.is_empty()
+                    && looks_like_agent_plan(answer_text)
+                {
+                    observations.push(record_loop_tool_rejection(
+                        "agent.action",
+                        "Your previous response was a natural-language plan, not an executed tool call. The Agent loop requires you to actually call tools (for example {\"action\":\"tool\",\"tool\":\"wiki.search\",\"query\":\"...\"}) instead of describing them. Return a tool JSON action now to execute the plan, or a final action that contains a real answer (not a plan).".to_string(),
+                        &mut tool_events,
+                        &mut events,
+                        &event_sink,
+                    ));
+                    continue;
+                }
                 let answer = action
                     .answer
                     .filter(|value| !value.trim().is_empty())
@@ -2855,19 +2889,33 @@ fn should_plan_tools_with_model(
     !message.trim().is_empty() && has_available_tool
 }
 
-fn agent_loop_iteration_budget(mode: AgentMode, has_skills: bool) -> usize {
+// Per-mode tool-call iteration budgets. Standard was raised from 8 → 16 and
+// Deep from 12 → 24 because users hit the previous limit on complex wiki
+// tasks (search + read + multiple wiki.write_page + composition). Each
+// activation of a skill adds headroom on top of the base. These caps exist
+// to bound a misbehaving model's repair-loop burn, but they should not stop
+// a well-formed agent task from finishing in one turn.
+//
+// `allow_unlimited` is an opt-in flag (Settings → Agent). When true, the
+// budget jumps to a high cap (200) regardless of mode. The stream idle
+// timeout and Stop button still bound the run, so a misbehaving model is
+// stopped even with this flag on.
+fn agent_loop_iteration_budget(mode: AgentMode, has_skills: bool, allow_unlimited: bool) -> usize {
+    if allow_unlimited {
+        return MAX_UNLIMITED_AGENT_ITERATIONS;
+    }
     let base = match mode {
-        AgentMode::Fast => 4,
+        AgentMode::Fast => 6,
         AgentMode::Standard | AgentMode::LocalFirst => MAX_AGENT_TOOL_ITERATIONS,
-        AgentMode::Deep => 12,
+        AgentMode::Deep => 24,
     };
     if !has_skills {
         return base;
     }
     match mode {
-        AgentMode::Fast => 8,
-        AgentMode::Standard | AgentMode::LocalFirst => 16,
-        AgentMode::Deep => 20,
+        AgentMode::Fast => 12,
+        AgentMode::Standard | AgentMode::LocalFirst => 28,
+        AgentMode::Deep => 36,
     }
 }
 
@@ -2967,7 +3015,7 @@ fn should_fallback_wiki_search(
 
 fn build_agent_loop_system(base_system: &str, retrieval_mode: AgentRetrievalMode) -> String {
     let smart_retrieval = if retrieval_mode == AgentRetrievalMode::Smart {
-        "\nSmart retrieval is enabled. Treat retrieval as a bounded evidence loop: after every observation, identify only the unresolved evidence gap, then either issue one concise revised retrieval action or answer. Prefer reading/following already discovered pages before broadening the query. Do not repeat equivalent queries. Stop as soon as the available evidence supports a cited answer; optional background is not a reason to continue."
+        "\nSmart retrieval is enabled. Treat retrieval as a bounded evidence loop: after every observation, identify the unresolved evidence gap, then either issue one concise revised retrieval action or answer. Prefer reading/following already discovered pages before broadening the query. Do not repeat equivalent queries. Cite the pages you actually observed in the final answer."
     } else {
         ""
     };
@@ -2980,16 +3028,16 @@ Choose exactly one action per turn:\n\
 3. {{\"action\":\"tool\",\"tool\":\"workspace.write_file\",\"path\":\"cover-image/cover.svg\",\"content\":\"...\"}}\n\
 3b. {{\"action\":\"tool\",\"tool\":\"workspace.append_file\",\"path\":\"deck/index.html\",\"content\":\"...\"}}\n\
 4. {{\"action\":\"final\",\"answer\":\"...\"}}\n\
-Use tools when they are useful, then wait for the observation in the next turn before deciding the next step.\n\
+Use the available retrieval and tool actions to gather evidence before answering. When the user's request asks about project content (wiki, sources, graph, skills), always call a tool in your first turn instead of answering from prior knowledge; wait for the observation in the next turn before drawing conclusions.\n\
 	Do not return natural-language plans such as \"I need to read...\" or \"Let me search...\". If you intend to read/search/write/run something, return the matching tool JSON action in this turn.\n\
 	Do not merely announce that you will use a skill or tool. If a skill references a file under its own directory, call skill.read_file with a relative path. If a skill requires an actual command-line generation step, call shell.exec.\n\
 	Use skill.read_file for skill Markdown/reference files. Do not use shell.exec, test, cat, or ls merely to inspect skill files or optional preference files.\n\
 	Use user.ask when a skill or task needs structured user choices, text input, confirmations, or multiple fields before it can continue. Do not simulate this by writing plain-text questions when a structured form is appropriate.\n\
 	Use workspace.write_file for generated artifacts such as SVG, HTML, Markdown drafts, JSON, or scripts. For large HTML/PPT files, first call workspace.write_file with an empty or small opening chunk, then call workspace.append_file with subsequent chunks, and finish only after the file contains closing tags such as </html>. Do not inline large heredocs or generated file bodies inside shell.exec JSON.\n\
 	Do not claim that a generated file exists until a workspace.write_file or shell.exec observation confirms it. In the final answer, mention only observed generated file paths.\n\
-	Converge quickly. Do not keep reading optional references, running optional validation, or polishing after the requested deliverable has been written. Prefer final as soon as the core user request is satisfied.\n\
+	Return {{\"action\":\"final\",\"answer\":\"...\"}} only after tool observations support the answer, or when the question can be answered directly from the provided project context (purpose, overview, schema, attached files, conversation history). Do not invent page paths, reference titles, or skill names you have not actually observed. Skip optional polishing once the core deliverable is written.\n\
 	Only use shell.exec when active skill instructions or the user's explicit request require command-line work after files have been written with workspace.write_file. Generated files must be written under the Agent workspace described above. Commands whose explicit file paths stay inside the Agent workspace can run without an approval prompt; commands that mention external paths, home directories, downloads, temp folders, or network URLs require approval.\n\
-Use wiki.write_page only when the user explicitly asks to create or update a wiki page. Existing pages are create-only unless allowOverwrite is explicitly justified by the user's request.{smart_retrieval}"
+Use wiki.write_page only when the user explicitly asks to create or update a wiki page. Existing pages are create-only unless allowOverwrite is explicitly justified by the user's request. The path MUST start with \"wiki/\" and end with \".md\"; other forms are rejected. The content field is the full Markdown body and must fit in a single compact JSON action — do not try to put a very long page body in one wiki.write_page content value. For long pages, write the page in multiple iterations: each iteration may either call wiki.write_page with a complete page section plus the previous content (still respecting the single-action JSON size limit), split the topic across several sibling pages under wiki/, or use shell.exec with a small heredoc to append the additional Markdown to an existing page. Avoid relying on any single response carrying the full long body.{smart_retrieval}"
     )
 }
 
@@ -3066,7 +3114,7 @@ fn build_agent_loop_user(
         out.push_str("- wiki.read_page: read a specific wiki markdown page by path.\n");
         out.push_str("- source.search: search raw source snippets.\n");
         out.push_str("- graph.search: retrieve relationships, neighbors, backlinks, dependencies, and connections between entities. Prefer it for relational questions and query with concise entity or concept names.\n");
-        out.push_str("- wiki.write_page: create a wiki markdown page when explicitly requested.\n");
+        out.push_str("- wiki.write_page: create a wiki markdown page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
     }
     if request.tools.web {
         out.push_str("- web.search: search external web sources.\n");
@@ -3100,7 +3148,7 @@ fn build_agent_loop_user(
         out.push_str("Budget is nearly exhausted. Return final now if any useful answer or generated file exists. Use at most one more tool only when it is strictly required to complete or close an already-started file; skip optional checks, optional reads, and style polishing.\n");
     }
     out.push_str(
-        "\nReturn the next JSON action now. Prefer {\"action\":\"final\",\"answer\":\"...\"} whenever the core request is already satisfied.",
+        "\nReturn the next JSON action now. Either return a tool action to gather more evidence, or return {\"action\":\"final\",\"answer\":\"...\"} with a real answer that cites what you observed. Do not return a plan or a description of what you intend to do.",
     );
     out
 }
@@ -3119,7 +3167,7 @@ fn parse_agent_loop_action(raw: &str) -> AgentLoopAction {
         return AgentLoopAction {
             action: "invalid_tool_json".to_string(),
             answer: Some(
-                "Invalid or truncated Agent tool JSON. Return one complete compact JSON object. For large generated files, initialize with workspace.write_file and continue with workspace.append_file chunks instead of putting the whole file or heredocs in one JSON object."
+                "Invalid or truncated Agent tool JSON. Your previous response was cut off mid-string or missing required closing braces. Return one complete compact JSON object that fits in a single response. For large generated files, initialize with workspace.write_file and continue with workspace.append_file chunks instead of putting the whole file or heredocs in one JSON object. For large wiki pages, keep the markdown body short enough to fit in one JSON action, split the topic across multiple wiki/ pages, or use shell.exec with a heredoc to append additional content. Do not stuff an entire long page into one wiki.write_page content value."
                     .to_string(),
             ),
             ..AgentLoopAction::default()
@@ -3941,6 +3989,139 @@ fn first_pending_wiki_write(events: &[AgentEvent]) -> Option<PendingWikiWrite> {
     })
 }
 
+const AGENT_PLAN_PHRASES: &[&str] = &[
+    "i will search",
+    "i will look",
+    "i will read",
+    "i will check",
+    "i will fetch",
+    "i will find",
+    "i will get",
+    "i will retrieve",
+    "i will examine",
+    "i will explore",
+    "i will investigate",
+    "i will query",
+    "i will use",
+    "i will call",
+    "i will write",
+    "i will create",
+    "i will update",
+    "i will start",
+    "i will run",
+    "i will try",
+    "let me search",
+    "let me look",
+    "let me find",
+    "let me check",
+    "let me fetch",
+    "let me get",
+    "let me read",
+    "let me retrieve",
+    "let me examine",
+    "let me explore",
+    "let me investigate",
+    "let me query",
+    "let me use",
+    "let me call",
+    "let me write",
+    "let me create",
+    "let me update",
+    "let me start",
+    "let me run",
+    "let me try",
+    "i need to search",
+    "i need to look",
+    "i need to find",
+    "i need to check",
+    "i need to read",
+    "i need to fetch",
+    "i need to retrieve",
+    "i need to write",
+    "i need to create",
+    "i need to update",
+    "i need to start",
+    "i need to run",
+    "first, i will",
+    "first, let me",
+    "first i will",
+    "first let me",
+    "i'll search",
+    "i'll look",
+    "i'll find",
+    "i'll read",
+    "i'll check",
+    "i'll fetch",
+    "i'll write",
+    "i'll create",
+    "i'll update",
+    "i'll start",
+    "i'll run",
+    "i'll try",
+    "next, i will",
+    "next, let me",
+    "then i will",
+    "then let me",
+    "now i will",
+    "now let me",
+    "i should search",
+    "i should look",
+    "i should find",
+    "i should read",
+    "i should check",
+    "i should fetch",
+    "我会搜索",
+    "我会查找",
+    "我会读取",
+    "我会检查",
+    "我会获取",
+    "我会调用",
+    "我会写",
+    "我会创建",
+    "我会更新",
+    "我会开始",
+    "让我搜索",
+    "让我查找",
+    "让我读取",
+    "让我检查",
+    "让我获取",
+    "让我调用",
+    "让我写",
+    "让我创建",
+    "让我更新",
+    "让我开始",
+    "我需要搜索",
+    "我需要查找",
+    "我需要读取",
+    "我需要检查",
+    "我需要获取",
+    "我需要写",
+    "我需要创建",
+    "我需要更新",
+    "我需要开始",
+    "首先我会",
+    "首先让我",
+    "然后我会",
+    "然后让我",
+    "接下来我会",
+    "接下来让我",
+    "先搜索",
+    "先查找",
+    "先读取",
+    "先检查",
+    "先获取",
+];
+
+fn looks_like_agent_plan(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    AGENT_PLAN_PHRASES
+        .iter()
+        .any(|phrase| lower.contains(phrase))
+}
+
 fn emit_event(
     events: &mut Vec<AgentEvent>,
     event_sink: &Option<AgentEventSink>,
@@ -4745,13 +4926,95 @@ mod tests {
 
     #[test]
     fn agent_loop_iteration_budget_expands_only_for_skill_turns() {
-        assert_eq!(agent_loop_iteration_budget(AgentMode::Fast, false), 4);
-        assert_eq!(agent_loop_iteration_budget(AgentMode::Standard, false), 8);
-        assert_eq!(agent_loop_iteration_budget(AgentMode::Deep, false), 12);
-        assert_eq!(agent_loop_iteration_budget(AgentMode::Fast, true), 8);
-        assert_eq!(agent_loop_iteration_budget(AgentMode::Standard, true), 16);
-        assert_eq!(agent_loop_iteration_budget(AgentMode::LocalFirst, true), 16);
-        assert_eq!(agent_loop_iteration_budget(AgentMode::Deep, true), 20);
+        // Standard and Deep were raised from 8/12 to 16/24 so a complex wiki
+        // task (search + read + multiple wiki.write_page + composition) can
+        // finish in one turn without exhausting the budget. Skills still
+        // expand the budget on top of the mode baseline.
+        assert_eq!(agent_loop_iteration_budget(AgentMode::Fast, false, false), 6);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::Standard, false, false), 16);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::LocalFirst, false, false), 16);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::Deep, false, false), 24);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::Fast, true, false), 12);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::Standard, true, false), 28);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::LocalFirst, true, false), 28);
+        assert_eq!(agent_loop_iteration_budget(AgentMode::Deep, true, false), 36);
+    }
+
+    #[test]
+    fn agent_loop_iteration_budget_supports_complex_wiki_task_in_one_turn() {
+        // A real wiki generation task typically burns ~10–14 productive tool
+        // calls: a few wiki.search calls, wiki.read_page, multiple
+        // wiki.write_page (one per section), and the final composition. The
+        // Standard base must be at least 16 so this kind of task finishes
+        // without hitting the limit answer. Pin the lower bounds so a
+        // well-meaning "let's tighten the budget" refactor doesn't
+        // accidentally regress this user's primary workflow.
+        let standard_base = agent_loop_iteration_budget(AgentMode::Standard, false, false);
+        let deep_base = agent_loop_iteration_budget(AgentMode::Deep, false, false);
+        assert!(
+            standard_base >= 16,
+            "Standard base budget must be >= 16, got {standard_base}"
+        );
+        assert!(
+            deep_base > standard_base,
+            "Deep budget ({deep_base}) must be larger than Standard ({standard_base})"
+        );
+        assert!(
+            agent_loop_iteration_budget(AgentMode::Standard, true, false) >= standard_base + 8,
+            "Adding explicit skills should expand Standard budget by at least 8"
+        );
+    }
+
+    #[test]
+    fn agent_loop_iteration_budget_unlimited_flag_raises_cap_regardless_of_mode() {
+        // The "unlimited" flag is an opt-in power-user setting (Settings →
+        // Agent). It must raise the cap far above any per-mode baseline so
+        // a multi-page wiki draft can finish in one turn. It must not be
+        // literal infinity so progress reporting and a future iteration
+        // counter still work; the stream idle timeout and Stop button are
+        // the real safety nets for runaway loops.
+        let unlimited_fast = agent_loop_iteration_budget(AgentMode::Fast, false, true);
+        let unlimited_deep_skills = agent_loop_iteration_budget(AgentMode::Deep, true, true);
+        let baseline_deep_skills = agent_loop_iteration_budget(AgentMode::Deep, true, false);
+        assert_eq!(unlimited_fast, unlimited_deep_skills,
+            "unlimited cap must be identical across modes and skill flags");
+        assert!(
+            unlimited_fast > baseline_deep_skills * 2,
+            "unlimited cap ({unlimited_fast}) must be substantially larger than any mode baseline ({baseline_deep_skills})"
+        );
+        // Must not be usize::MAX — we still want iteration progress and the
+        // option for a future "you're past 100 iterations" diagnostic.
+        assert!(unlimited_fast > 0 && unlimited_fast < usize::MAX);
+    }
+
+    #[test]
+    fn looks_like_agent_plan_flags_future_plan_phrases() {
+        assert!(looks_like_agent_plan("I will search the wiki for X."));
+        assert!(looks_like_agent_plan("Let me find the answer in the project."));
+        assert!(looks_like_agent_plan("I need to read more about this topic."));
+        assert!(looks_like_agent_plan("First, let me check the wiki."));
+        assert!(looks_like_agent_plan("Then I will summarize the findings."));
+        assert!(looks_like_agent_plan("I'll look up the relevant page."));
+        assert!(looks_like_agent_plan("Next, I will use graph.search."));
+        assert!(looks_like_agent_plan("让我搜索一下 wiki 里的相关内容"));
+        assert!(looks_like_agent_plan("我需要先读取这一页"));
+        assert!(looks_like_agent_plan("首先让我检查一下"));
+        assert!(looks_like_agent_plan("然后我会写一个 markdown 页面"));
+    }
+
+    #[test]
+    fn looks_like_agent_plan_does_not_flag_real_answers() {
+        assert!(!looks_like_agent_plan(""));
+        assert!(!looks_like_agent_plan("The wiki has 5 pages about search."));
+        assert!(!looks_like_agent_plan(
+            "Based on the search, the answer is X."
+        ));
+        assert!(!looks_like_agent_plan("I found that the project covers Y."));
+        assert!(!looks_like_agent_plan("Hello! I can help you with that."));
+        assert!(!looks_like_agent_plan("项目里没有找到 X 相关的内容"));
+        assert!(!looks_like_agent_plan(
+            "Here is the page I already read: it says ..."
+        ));
     }
 
     #[test]
@@ -4885,6 +5148,110 @@ mod tests {
         assert!(prompt.contains("A generated workspace file has already been observed"));
         assert!(prompt.contains("Budget is nearly exhausted"));
         assert!(prompt.contains(r#"{"action":"final","answer":"..."}"#));
+    }
+
+    #[test]
+    fn agent_loop_system_prompt_does_not_push_fast_convergence() {
+        let prompt = build_agent_loop_system("base", AgentRetrievalMode::Standard);
+        // The old wording encouraged the model to return `final` before
+        // gathering evidence; the new wording should require tool
+        // observations or explicit context before allowing `final`.
+        assert!(!prompt.contains("Converge quickly"));
+        assert!(!prompt.contains("Prefer final as soon as the core user request is satisfied"));
+        assert!(prompt.contains("Use the available retrieval and tool actions to gather evidence"));
+        assert!(prompt.contains("only after tool observations support the answer"));
+        assert!(prompt.contains("Do not invent page paths"));
+
+        let smart = build_agent_loop_system("base", AgentRetrievalMode::Smart);
+        // Smart retrieval still encourages evidence-driven convergence, but
+        // no longer demands the model to stop the moment evidence is "enough".
+        assert!(!smart.contains("Stop as soon as the available evidence supports a cited answer"));
+        assert!(smart.contains("Cite the pages you actually observed"));
+    }
+
+    #[test]
+    fn agent_loop_user_prompt_does_not_prefer_final_by_default() {
+        let prompt = build_agent_loop_user(
+            "Base user",
+            &AgentChatRequest::default(),
+            &[],
+            &[],
+            0,
+            8,
+            false,
+        );
+        // The trailing instruction used to push the model toward `final`
+        // whenever the request looked satisfied. The new instruction asks
+        // for either another tool action or a cited final answer.
+        assert!(!prompt.contains("Prefer {\"action\":\"final\""));
+        assert!(prompt.contains("Return the next JSON action now"));
+        assert!(prompt.contains("Do not return a plan or a description"));
+    }
+
+    #[test]
+    fn agent_loop_system_prompt_warns_against_packing_long_wiki_pages_into_one_action() {
+        let prompt = build_agent_loop_system("base", AgentRetrievalMode::Standard);
+        assert!(
+            prompt.contains("path MUST start with \"wiki/\" and end with \".md\""),
+            "system prompt should spell out the wiki.write_page path rule"
+        );
+        assert!(
+            prompt.contains("do not try to put a very long page body in one wiki.write_page content value"),
+            "system prompt should warn against stuffing a long page into one JSON content field"
+        );
+        assert!(
+            prompt.contains("split the topic across several sibling pages under wiki/")
+                || prompt.contains("split the topic across multiple wiki/ pages"),
+            "system prompt should suggest splitting long pages across siblings"
+        );
+        assert!(
+            prompt.contains("shell.exec with a small heredoc to append"),
+            "system prompt should suggest the shell.exec + heredoc fallback for long pages"
+        );
+    }
+
+    #[test]
+    fn agent_loop_user_prompt_describes_wiki_write_page_path_rule_and_size_limit() {
+        let prompt = build_agent_loop_user(
+            "Base user",
+            &AgentChatRequest::default(),
+            &[],
+            &[],
+            0,
+            8,
+            false,
+        );
+        assert!(
+            prompt.contains("wiki.write_page:"),
+            "user prompt should list wiki.write_page"
+        );
+        assert!(
+            prompt.contains("must start with \"wiki/\" and end with \".md\""),
+            "user prompt should repeat the wiki.write_page path rule"
+        );
+        assert!(
+            prompt.contains("The full markdown body must fit in one compact JSON action"),
+            "user prompt should warn that the full markdown body must fit one JSON action"
+        );
+    }
+
+    #[test]
+    fn truncated_tool_json_rejection_suggests_wiki_split_or_heredoc_fallback() {
+        // Simulate a truncated model response that looks like a wiki.write_page
+        // attempt — it begins a tool JSON object with the action/tool fields
+        // but the rest is gone (cut off mid-string).
+        let raw = r##"{"action":"tool","tool":"wiki.write_page","path":"wiki/concepts/sota.md","content":"# SOTA and baseline."##;
+        let action = parse_agent_loop_action(raw);
+        assert_eq!(action.action, "invalid_tool_json");
+        let answer = action.answer.as_deref().unwrap_or_default();
+        assert!(
+            answer.contains("split the topic across multiple wiki/ pages"),
+            "rejection should tell the model how to split a long wiki page"
+        );
+        assert!(
+            answer.contains("shell.exec with a heredoc"),
+            "rejection should mention the shell.exec heredoc fallback"
+        );
     }
 
     #[test]

@@ -241,6 +241,13 @@ export function createDefaultGraphUiState(): GraphUiState {
 export interface GeneralConfig {
   autostart: boolean
   closeBehavior: CloseBehavior
+  // Power-user flag. When true, every Agent turn (regardless of mode +
+  // skill flags) is allowed up to MAX_UNLIMITED_AGENT_ITERATIONS tool
+  // calls — large enough for a multi-page wiki draft in one turn. The
+  // stream idle timeout and Stop button still bound the run, so this is
+  // safe but is opt-in to preserve predictable budgets for the default
+  // user. Defaults to false.
+  unlimitedAgentIterations: boolean
 }
 
 interface SourceWatchConfig {
@@ -566,6 +573,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   generalConfig: {
     autostart: false,
     closeBehavior: "minimize",
+    unlimitedAgentIterations: false,
   },
 
   graphUiState: createDefaultGraphUiState(),

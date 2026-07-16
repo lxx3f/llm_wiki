@@ -234,6 +234,12 @@
       "deep": "Deep",
       "localFirst": "Local first"
     },
+    "agentModeDescriptions": {
+      "fast": "Up to 6 tool calls (12 with skills). Quick replies when you only need a single search or a short write.",
+      "standard": "Up to 16 tool calls (28 with skills). Balanced budget for typical wiki tasks such as search → read → compose.",
+      "deep": "Up to 24 tool calls (36 with skills). Use for long multi-step work like drafting many pages from raw sources.",
+      "localFirst": "Up to 16 tool calls (28 with skills). Same budget as Standard, but routed through your local LLM stack first."
+    },
     "enableAnyTxtInSettings": "Enable AnyTXT in Settings → External Information Sources",
     "sendMessage": "Send message",
     "stopGeneration": "Stop generation",
@@ -385,7 +391,9 @@
         "closeMinimize": "Hide window",
         "closeMinimizeHint": "Keep LLM Wiki running in the background when the window closes. On macOS this matches the normal red close button behavior. If a Linux tray is unavailable, the window is minimized instead of hidden.",
         "closeExit": "Quit app",
-        "closeExitHint": "Exit LLM Wiki immediately when the window closes."
+        "closeExitHint": "Exit LLM Wiki immediately when the window closes.",
+        "unlimitedAgentIterations": "Remove the Agent tool-call cap (power users)",
+        "unlimitedAgentIterationsHint": "Lets a single Agent turn run up to ~200 tool calls regardless of mode. Use this for long multi-page wiki drafts. The stream idle timeout and Stop button still bound the run, so a misbehaving model is still safe to interrupt."
       },
       "skills": {
         "title": "Skills",

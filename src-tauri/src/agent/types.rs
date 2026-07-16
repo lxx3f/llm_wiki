@@ -167,6 +167,15 @@ pub struct AgentChatRequest {
     pub stream: Option<bool>,
     #[serde(default = "default_true")]
     pub persist_session: bool,
+    // When true, the runtime raises its per-mode iteration cap to a very
+    // generous upper bound so long-running tasks (e.g. multi-page wiki
+    // drafts over many tool calls) can finish without manual
+    // "continue" prompts. The Stream idle timeout and the Stop button
+    // still bound the run, so this is safe to enable by default for
+    // power users — but defaults to false so non-power users keep the
+    // predictable budget from a misbehaving model.
+    #[serde(default)]
+    pub allow_unlimited_iterations: bool,
 }
 
 impl Default for AgentChatRequest {
@@ -191,6 +200,7 @@ impl Default for AgentChatRequest {
             images: Vec::new(),
             stream: None,
             persist_session: true,
+            allow_unlimited_iterations: false,
         }
     }
 }

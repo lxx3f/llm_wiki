@@ -167,6 +167,7 @@ function initialDraft(
     apiToken: apiConfig.token,
     autostart: generalConfig.autostart,
     closeBehavior: generalConfig.closeBehavior,
+    unlimitedAgentIterations: generalConfig.unlimitedAgentIterations,
     uiLanguage,
     theme: theme ?? "system",
     zoomLevel: zoomLevel ?? useZoomStore.getState().level,
@@ -408,6 +409,7 @@ export function SettingsView() {
     const newGeneralConfig = {
       autostart: draft.autostart,
       closeBehavior: draft.closeBehavior,
+      unlimitedAgentIterations: draft.unlimitedAgentIterations,
     }
 
     // Push all config values to zustand before any awaited save below. The

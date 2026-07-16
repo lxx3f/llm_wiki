@@ -91,6 +91,28 @@ export function GeneralSection({ draft, setDraft }: Props) {
           })}
         </p>
       </div>
+
+      <label className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+        <input
+          type="checkbox"
+          checked={draft.unlimitedAgentIterations}
+          onChange={(e) => setDraft("unlimitedAgentIterations", e.target.checked)}
+          className="mt-0.5 h-4 w-4"
+        />
+        <div className="space-y-1">
+          <span className="text-sm font-medium">
+            {t("settings.sections.general.unlimitedAgentIterations", {
+              defaultValue: "Remove the Agent tool-call cap (power users)",
+            })}
+          </span>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.sections.general.unlimitedAgentIterationsHint", {
+              defaultValue:
+                "Lets a single Agent turn run up to ~200 tool calls regardless of mode. Use this for long multi-page wiki drafts. The stream idle timeout and Stop button still bound the run, so a misbehaving model is still safe to interrupt.",
+            })}
+          </p>
+        </div>
+      </label>
     </div>
   )
 }

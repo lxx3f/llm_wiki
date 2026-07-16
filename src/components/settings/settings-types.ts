@@ -72,6 +72,8 @@ export interface SettingsDraft {
   // General app behavior
   autostart: boolean
   closeBehavior: CloseBehavior
+  // Agent behavior
+  unlimitedAgentIterations: boolean
 
   // Source folder auto watch
   sourceWatchConfig: SourceWatchConfig

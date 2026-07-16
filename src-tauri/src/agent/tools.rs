@@ -519,7 +519,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "wiki.write_page".to_string(),
             description:
-                "Create a Markdown wiki page under wiki/ with project-bound path checks. Existing files require allowOverwrite=true."
+                "Create or overwrite a Markdown wiki page under wiki/ with project-bound path checks. The path MUST start with \"wiki/\" and end with \".md\"; otherwise the call is rejected. Existing files require allowOverwrite=true. For long pages that may exceed a single model response, write a smaller initial page with wiki.write_page, then keep extending it with shell.exec + cat >> (the workspace heredoc pattern). Do not put an entire long Markdown page in one wiki.write_page content field."
                     .to_string(),
             effects: vec![ToolEffect::Write],
             parameters: Some(serde_json::json!({
@@ -527,7 +527,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Project-relative path such as wiki/queries/new-page.md"
+                        "description": "Project-relative path. MUST start with \"wiki/\" and end with \".md\"; for example wiki/queries/new-page.md. Paths that omit the wiki/ prefix or that do not end with .md are rejected."
                     },
                     "content": { "type": "string" },
                     "allowOverwrite": {

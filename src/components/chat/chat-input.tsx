@@ -26,6 +26,10 @@ export interface ChatSendOptions {
   skillMode?: "auto" | "explicit"
   approvedShellCommands?: string[]
   shellCommand?: string
+  // Power-user flag from Settings → Agent. When true, the rust runtime
+  // lifts the per-mode iteration cap so long multi-page wiki drafts can
+  // finish in one turn. Defaults to false on the wire if omitted.
+  allowUnlimitedIterations?: boolean
 }
 
 const AGENT_MODE_OPTIONS: ChatAgentMode[] = ["fast", "standard", "deep", "local_first"]
@@ -858,6 +862,7 @@ export function ChatInput({
                     aria-checked={active}
                     disabled={isStreaming}
                     onClick={() => onAgentModeChange(mode)}
+                    title={`${agentModeLabel(mode)} — ${t(`chat.agentModeDescriptions.${mode === "local_first" ? "localFirst" : mode}`)}`}
                     className={`h-6 rounded px-2 text-xs font-medium transition-colors ${
                       active
                         ? "bg-background text-foreground shadow-sm"

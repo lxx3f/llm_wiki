@@ -869,6 +869,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                 skillMode: requestedSkillMode,
                 approvedShellCommands: sendOptions.approvedShellCommands ?? [],
                 shellCommand: sendOptions.shellCommand,
+                allowUnlimitedIterations: sendOptions.allowUnlimitedIterations ?? false,
                 images: images.map((image) => ({
                   mediaType: image.mediaType,
                   dataBase64: image.dataBase64,
@@ -946,6 +947,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             historyExplicit: true,
             approvedShellCommands: sendOptions.approvedShellCommands ?? [],
             shellCommand: sendOptions.shellCommand,
+            allowUnlimitedIterations: sendOptions.allowUnlimitedIterations ?? false,
             history: priorWireMessages,
             images: images.map((image) => ({
               mediaType: image.mediaType,
@@ -1218,6 +1220,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
         skillMode: useChatStore.getState().selectedSkills.length > 0 ? "explicit" : "auto",
         approvedShellCommands: [command.trim()],
         shellCommand: command.trim(),
+        allowUnlimitedIterations: useWikiStore.getState().generalConfig.unlimitedAgentIterations,
         suppressUserMessage: true,
         historyOverride: resumeHistory,
       })
@@ -1248,6 +1251,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       skills: useChatStore.getState().selectedSkills,
       contextFiles: useChatStore.getState().selectedContextFiles,
       skillMode: useChatStore.getState().selectedSkills.length > 0 ? "explicit" : "auto",
+      allowUnlimitedIterations: useWikiStore.getState().generalConfig.unlimitedAgentIterations,
     })
     return true
   }, [handleSend, activeStreaming])
@@ -1265,6 +1269,34 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
 
   const handleConfirmPendingWikiWrite = useCallback(async (messageId: string, pendingWrite: ChatPendingWikiWrite) => {
     if (!project) return
+    if (activeStreaming) {
+      console.warn("[chat] wiki confirm ignored: another turn is still streaming")
+      return
+    }
+    const active = useChatStore.getState().getActiveMessages()
+    const assistantIndex = active.findIndex((message) => message.id === messageId)
+    const priorUser = assistantIndex > 0
+      ? [...active.slice(0, assistantIndex)]
+          .reverse()
+          .find((message) => message.role === "user")
+      : undefined
+    const assistantMessage = assistantIndex > 0 ? active[assistantIndex] : undefined
+    let resumeHistory: { role: "user" | "assistant"; content: string }[] | undefined
+    if (assistantMessage && priorUser) {
+      resumeHistory = [
+        ...compactChatHistoryForResume(active.slice(0, assistantIndex), maxHistoryMessages),
+        {
+          role: "assistant" as const,
+          content: [
+            "The previous Agent turn stopped at a wiki.write_page confirmation boundary.",
+            "Preserved tool progress before confirmation:",
+            summarizeAgentStepsForResume(assistantMessage.agentSteps),
+            "",
+            assistantMessage.content,
+          ].join("\n"),
+        },
+      ]
+    }
     const confirmed = await confirmPendingWikiWrite({
       pendingWrite,
       projectId: project.id,
@@ -1292,7 +1324,39 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       read: readFile,
       setFileContent: useWikiStore.getState().setFileContent,
     })
-  }, [activeConversationId, onConfirmedWrite, project])
+    // Resume the agent loop so any remaining tool calls or the final answer fire
+    // automatically — without this, the run stops at the confirmation boundary
+    // and the user has to manually type "continue" to unblock it (Bug 1).
+    const resumeMessage = [
+      `Confirmed. wiki.write_page to ${pendingWrite.path} was approved by the user and the file is now saved on disk.`,
+      "",
+      "Continue the same Agent task from the preserved tool progress. The original request may still have more pages, references to read, or a final answer to compose. Do not restart completed searches or file reads unless the user explicitly asked for them. When the original task is complete (or no further work is justified), return final with a brief confirmation of which pages were written.",
+    ].join("\n")
+    // Mirror the shell-approval flow: suppress the user-visible bubble, but
+    // pass the preserved history so the agent has full context, and clear any
+    // stale streaming state left over from the paused turn.
+    abortRef.current?.abort()
+    abortRef.current = null
+    activeRunSessionIdRef.current = null
+    activeRunIdRef.current = null
+    setStreaming(false)
+    try {
+      await handleSend(resumeMessage, priorUser?.images ?? [], {
+        useWebSearch: useChatStore.getState().useWebSearch,
+        useAnyTxtSearch: useChatStore.getState().useAnyTxtSearch,
+        agentMode: useChatStore.getState().agentMode,
+        retrievalMode: useChatStore.getState().retrievalMode,
+        skills: useChatStore.getState().selectedSkills,
+        contextFiles: useChatStore.getState().selectedContextFiles,
+        skillMode: useChatStore.getState().selectedSkills.length > 0 ? "explicit" : "auto",
+        allowUnlimitedIterations: useWikiStore.getState().generalConfig.unlimitedAgentIterations,
+        suppressUserMessage: true,
+        ...(resumeHistory ? { historyOverride: resumeHistory } : {}),
+      })
+    } catch (err) {
+      console.error("[chat] failed to resume after wiki write confirmation:", err)
+    }
+  }, [activeConversationId, activeStreaming, handleSend, maxHistoryMessages, onConfirmedWrite, project, setStreaming, t])
 
   const handleCancelPendingWikiWrite = useCallback((messageId: string) => {
     useChatStore.setState((state) => ({ messages: cancelPendingWikiWrite(state.messages, messageId) }))

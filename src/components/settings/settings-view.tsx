@@ -15,6 +15,7 @@ import {
   Server,
   Settings,
   FileText,
+  PlugZap,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -40,6 +41,7 @@ import { ScheduledImportSection } from "./sections/scheduled-import-section"
 import { SourceWatchSection } from "./sections/source-watch-section"
 import { MineruSection } from "./sections/mineru-section"
 import { ApiServerSection } from "./sections/api-server-section"
+import { ExternalMcpSection } from "./sections/external-mcp-section"
 import { GeneralSection } from "./sections/general-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
@@ -56,6 +58,7 @@ type CategoryId =
   | "scheduled-import"
   | "mineru"
   | "api-server"
+  | "external-mcp"
   | "output"
   | "interface"
   | "maintenance"
@@ -82,6 +85,7 @@ const CATEGORIES: Category[] = [
   { id: "scheduled-import", labelKey: "settings.categories.scheduledImport", icon: Clock },
   { id: "mineru", labelKey: "settings.categories.mineru", icon: FileText },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
+  { id: "external-mcp", labelKey: "settings.categories.externalMcp", icon: PlugZap },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
@@ -618,6 +622,8 @@ export function SettingsView() {
         return <MineruSection draft={draft} setDraft={setDraft} />
       case "api-server":
         return <ApiServerSection draft={draft} setDraft={setDraft} />
+      case "external-mcp":
+        return <ExternalMcpSection />
       case "output":
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":
@@ -691,7 +697,7 @@ export function SettingsView() {
         {/* Global Save bar hidden for sections that persist inline:
             - "llm" saves per-row on every edit (independent per-preset state)
             - "about" has no draft-bound fields */}
-        {active !== "about" && active !== "llm" && (
+        {active !== "about" && active !== "llm" && active !== "external-mcp" && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className={`text-xs ${saveError ? "text-destructive" : "text-muted-foreground"}`}>

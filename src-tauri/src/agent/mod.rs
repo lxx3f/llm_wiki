@@ -8,6 +8,7 @@
 pub mod cancel;
 pub mod context;
 pub mod events;
+pub mod mcp_client;
 pub mod permissions;
 pub mod pending_writes;
 pub mod provider;

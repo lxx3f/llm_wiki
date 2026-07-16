@@ -1,6 +1,7 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { ApiConfig, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { ApiConfig, ExternalMcpConfig, GeneralConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import { normalizeExternalMcpConfig } from "@/lib/external-mcp-config"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 import { DEFAULT_ZOOM_LEVEL, clampZoomLevel } from "@/stores/zoom-store"
@@ -85,6 +86,19 @@ export async function saveSearchApiConfig(config: SearchApiConfig): Promise<void
 export async function loadSearchApiConfig(): Promise<SearchApiConfig | null> {
   const store = await getStore()
   return (await store.get<SearchApiConfig>(SEARCH_API_KEY)) ?? null
+}
+
+const EXTERNAL_MCP_CONFIG_KEY = "externalMcpConfig"
+
+export async function saveExternalMcpConfig(config: ExternalMcpConfig): Promise<void> {
+  const store = await getStore()
+  await store.set(EXTERNAL_MCP_CONFIG_KEY, normalizeExternalMcpConfig(config))
+  await store.save()
+}
+
+export async function loadExternalMcpConfig(): Promise<ExternalMcpConfig> {
+  const store = await getStore()
+  return normalizeExternalMcpConfig(await store.get<unknown>(EXTERNAL_MCP_CONFIG_KEY))
 }
 
 const EMBEDDING_KEY = "embeddingConfig"

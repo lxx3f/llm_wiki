@@ -34,6 +34,7 @@ struct AgentRuntimeConfig {
     llm: Option<agent::provider::LlmConfig>,
     web_search: Option<agent::tools::WebSearchConfig>,
     anytxt: Option<agent::tools::AnyTxtConfig>,
+    external_mcp: Option<agent::mcp_client::ExternalMcpRuntimeConfig>,
 }
 
 #[tauri::command]
@@ -461,6 +462,10 @@ fn load_agent_runtime_config(app: &tauri::AppHandle) -> AgentRuntimeConfig {
         anytxt: parsed
             .get("searchApiConfig")
             .and_then(|value| value.get("anyTxt"))
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
+        external_mcp: parsed
+            .get("externalMcpConfig")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok()),
     }

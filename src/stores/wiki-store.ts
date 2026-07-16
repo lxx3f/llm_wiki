@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import type { WikiProject, FileNode } from "@/types/wiki"
 import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config"
+import { DEFAULT_EXTERNAL_MCP_CONFIG, type ExternalMcpConfig } from "@/lib/external-mcp-config"
 import {
   buildProjectPathIndexFromTree,
   createEmptyProjectPathIndex,
@@ -106,6 +107,14 @@ interface SearchApiConfig {
   deepResearchSource?: DeepResearchSource
   anyTxt?: AnyTxtConfig
 }
+
+export type {
+  ExternalMcpConfig,
+  ExternalMcpEnvironmentVariable,
+  ExternalMcpServerConfig,
+  ExternalMcpServerLimits,
+  ExternalMcpStdioTransport,
+} from "@/lib/external-mcp-config"
 
 interface EmbeddingConfig {
   enabled: boolean
@@ -385,6 +394,7 @@ interface WikiState {
   /** Which preset is currently active. `null` = no LLM configured. */
   activePresetId: string | null
   searchApiConfig: SearchApiConfig
+  externalMcpConfig: ExternalMcpConfig
   embeddingConfig: EmbeddingConfig
   multimodalConfig: MultimodalConfig
   outputLanguage: OutputLanguage
@@ -412,6 +422,7 @@ interface WikiState {
   setProviderConfigs: (configs: ProviderConfigs) => void
   setActivePresetId: (id: string | null) => void
   setSearchApiConfig: (config: SearchApiConfig) => void
+  setExternalMcpConfig: (config: ExternalMcpConfig) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
   setMultimodalConfig: (config: MultimodalConfig) => void
   setOutputLanguage: (lang: OutputLanguage) => void
@@ -514,6 +525,8 @@ export const useWikiStore = create<WikiState>((set) => ({
     },
   },
 
+  externalMcpConfig: DEFAULT_EXTERNAL_MCP_CONFIG,
+
   embeddingConfig: {
     enabled: false,
     endpoint: "",
@@ -582,6 +595,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setProviderConfigs: (providerConfigs) => set({ providerConfigs }),
   setActivePresetId: (activePresetId) => set({ activePresetId }),
   setSearchApiConfig: (searchApiConfig) => set({ searchApiConfig }),
+  setExternalMcpConfig: (externalMcpConfig) => set({ externalMcpConfig }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
   setMultimodalConfig: (multimodalConfig) => set({ multimodalConfig }),
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),

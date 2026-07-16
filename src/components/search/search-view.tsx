@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react"
+import { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import { Search, FileText, ImageIcon, X, ArrowUpRight } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
@@ -8,6 +8,11 @@ import { normalizePath } from "@/lib/path-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { isImeComposing } from "@/lib/keyboard-utils"
+
+// Debounce delay (ms) for live searching. Keyboard Enter bypasses the
+// debounce and runs the search immediately so power users can keep the
+// previous UX of pressing Enter to fire the query.
+const SEARCH_DEBOUNCE_MS = 300
 
 /**
  * One image hit displayed in the Images section.
@@ -61,6 +66,67 @@ export function SearchView() {
     },
     [project],
   )
+
+  // Track the latest query the search has acknowledged so a slow
+  // network response doesn't overwrite a fresher keystroke. We keep
+  // a mutable ref to compare against because state would lag by a
+  // render cycle.
+  const lastAppliedQueryRef = useRef("")
+  // Token used to ignore stale in-flight responses when the user keeps
+  // typing. Bumped on every search request.
+  const searchTokenRef = useRef(0)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Re-trigger search whenever the query changes. Cancels any pending
+  // debounce so we always run only the latest query. Empty queries are
+  // cleared immediately to avoid flashing stale results.
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      lastAppliedQueryRef.current = ""
+      setResults([])
+      setSearching(false)
+      setHasSearched(false)
+      return
+    }
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+    }
+    debounceRef.current = setTimeout(() => {
+      const token = searchTokenRef.current + 1
+      searchTokenRef.current = token
+      lastAppliedQueryRef.current = trimmed
+      void doSearch(trimmed).then(() => {
+        // Only mark searched=true if this response is still the latest.
+        // Earlier in-flight requests are intentionally ignored.
+        if (searchTokenRef.current === token) {
+          setHasSearched(true)
+        }
+      })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        debounceRef.current = null
+      }
+    }
+  }, [query, project, doSearch])
+
+  // Enter always fires immediately, ignoring the debounce window.
+  const runImmediately = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+    const token = searchTokenRef.current + 1
+    searchTokenRef.current = token
+    lastAppliedQueryRef.current = query.trim()
+    void doSearch(query).then(() => {
+      if (searchTokenRef.current === token) {
+        setHasSearched(true)
+      }
+    })
+  }, [doSearch, query])
 
   // Flatten + dedupe images across results. Two results referencing
   // the same image (e.g. the source-summary AND a concept page that
@@ -190,9 +256,9 @@ export function SearchView() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (isImeComposing(e)) return
-              if (e.key === "Enter") doSearch(query)
+              if (e.key === "Enter") runImmediately()
             }}
-            placeholder={t("search.placeholder") + " (Enter to search)"}
+            placeholder={t("search.placeholder", { defaultValue: "Search" })}
             autoFocus
             className="w-full rounded-md border bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
@@ -213,7 +279,7 @@ export function SearchView() {
       ) : !hasSearched ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
           <Search className="h-8 w-8 text-muted-foreground/30" />
-          <p>Press Enter to search</p>
+          <p>{t("search.liveHint", { defaultValue: "Type to search" })}</p>
         </div>
       ) : results.length === 0 ? (
         <div className="flex-1 p-4 text-center text-sm text-muted-foreground">

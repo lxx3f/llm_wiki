@@ -36,6 +36,14 @@
     "done": "Done",
     "editRaw": "Edit raw Markdown",
     "doneEditing": "Done editing",
+    "delete": {
+      "label": "Delete",
+      "confirmTitle": "Delete this page?",
+      "confirmBody": "This removes the page from the project's wiki/ folder. Other pages that link here may break. This action cannot be undone in the editor.",
+      "cancel": "Cancel",
+      "confirm": "Delete",
+      "deleting": "Deleting…"
+    },
     "selection": {
       "askAgent": "Ask Agent about selection",
       "placeholder": "Explain, rewrite, shorten...",
@@ -285,7 +293,8 @@
     "title": "Search",
     "placeholder": "Search wiki pages...",
     "noResults": "No results found",
-    "startSearching": "Type to search wiki pages"
+    "startSearching": "Type to search wiki pages",
+    "liveHint": "Type to search"
   },
   "lint": {
     "title": "Wiki Lint",

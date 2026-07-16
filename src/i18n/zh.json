@@ -36,6 +36,14 @@
     "done": "完成",
     "editRaw": "编辑原始 Markdown",
     "doneEditing": "完成编辑",
+    "delete": {
+      "label": "删除",
+      "confirmTitle": "确认删除此页面？",
+      "confirmBody": "将从项目 wiki/ 目录移除该文件。指向此页面的其它链接可能会失效，编辑器内无法撤销。",
+      "cancel": "取消",
+      "confirm": "删除",
+      "deleting": "删除中…"
+    },
     "selection": {
       "askAgent": "让 Agent 处理选中内容",
       "placeholder": "解释、改写、缩短……",
@@ -285,7 +293,8 @@
     "title": "搜索",
     "placeholder": "搜索 Wiki 页面...",
     "noResults": "未找到相关结果",
-    "startSearching": "输入关键词搜索 Wiki 页面"
+    "startSearching": "输入关键词搜索 Wiki 页面",
+    "liveHint": "输入即可搜索"
   },
   "lint": {
     "title": "Wiki 检查",

@@ -110,6 +110,7 @@ export async function preprocessFile(path: string): Promise<string> {
 }
 
 export async function deleteFile(path: string): Promise<void> {
+  assertAbsoluteFsPath("deleteFile", path)
   return invoke("delete_file", { path })
 }
 

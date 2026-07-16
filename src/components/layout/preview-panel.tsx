@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from "react"
+import { useEffect, useCallback, useRef, useState } from "react"
 import { X } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile } from "@/commands/fs"
@@ -6,6 +6,11 @@ import { getFileCategory, isBinary, isExtractedTextPreviewFile } from "@/lib/fil
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
 import { getFileName } from "@/lib/path-utils"
+import { searchWiki, tokenizeQuery, type SearchResult } from "@/lib/search"
+import { normalizePath } from "@/lib/path-utils"
+import { isImeComposing } from "@/lib/keyboard-utils"
+
+const WIKI_SEARCH_DEBOUNCE_MS = 300
 
 export function PreviewPanel() {
   const selectedFile = useWikiStore((s) => s.selectedFile)
@@ -14,6 +19,9 @@ export function PreviewPanel() {
   const externalPreview = useWikiStore((s) => s.externalPreview)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const closePreview = useWikiStore((s) => s.closePreview)
+  const project = useWikiStore((s) => s.project)
+  const openFileInPreview = useWikiStore((s) => s.openFileInPreview)
+  const setActiveView = useWikiStore((s) => s.setActiveView)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Snapshot of what was most recently loaded from disk. Milkdown re-emits
   // `markdownUpdated` on initial parse (before the user types anything),
@@ -21,6 +29,14 @@ export function PreviewPanel() {
   // marker if read_file had returned one for a missing/locked file. We
   // skip save when the incoming markdown equals the last-loaded content.
   const lastLoadedRef = useRef<string>("")
+  // Wiki-only quick search: type to filter and open wiki pages without
+  // navigating to the dedicated Search view (and let Enter jump there
+  // with the same query).
+  const [wikiSearchQuery, setWikiSearchQuery] = useState("")
+  const [wikiSearchResults, setWikiSearchResults] = useState<SearchResult[]>([])
+  const [wikiSearchOpen, setWikiSearchOpen] = useState(false)
+  const wikiSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wikiSearchToken = useRef(0)
 
   useEffect(() => {
     if (!selectedFile) {
@@ -88,8 +104,84 @@ export function PreviewPanel() {
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      if (wikiSearchDebounce.current) clearTimeout(wikiSearchDebounce.current)
     }
   }, [])
+
+  const runWikiSearch = useCallback(
+    async (query: string) => {
+      if (!project) {
+        setWikiSearchResults([])
+        return
+      }
+      const trimmed = query.trim()
+      if (!trimmed) {
+        setWikiSearchResults([])
+        return
+      }
+      try {
+        const token = wikiSearchToken.current + 1
+        wikiSearchToken.current = token
+        const found = await searchWiki(normalizePath(project.path), trimmed)
+        if (token !== wikiSearchToken.current) return
+        setWikiSearchResults(found.slice(0, 8))
+      } catch (err) {
+        console.error("Wiki quick search failed:", err)
+        setWikiSearchResults([])
+      }
+    },
+    [project],
+  )
+
+  useEffect(() => {
+    const trimmed = wikiSearchQuery.trim()
+    if (!trimmed) {
+      if (wikiSearchDebounce.current) {
+        clearTimeout(wikiSearchDebounce.current)
+        wikiSearchDebounce.current = null
+      }
+      setWikiSearchResults([])
+      return
+    }
+    if (wikiSearchDebounce.current) {
+      clearTimeout(wikiSearchDebounce.current)
+    }
+    wikiSearchDebounce.current = setTimeout(() => {
+      void runWikiSearch(trimmed)
+    }, WIKI_SEARCH_DEBOUNCE_MS)
+    return () => {
+      if (wikiSearchDebounce.current) {
+        clearTimeout(wikiSearchDebounce.current)
+        wikiSearchDebounce.current = null
+      }
+    }
+  }, [wikiSearchQuery, runWikiSearch])
+
+  const jumpToFullSearch = useCallback(() => {
+    const trimmed = wikiSearchQuery.trim()
+    if (!trimmed) return
+    setWikiSearchOpen(false)
+    setActiveView("search")
+    setWikiSearchQuery("")
+    setWikiSearchResults([])
+    // The Search view manages its own state; we just switch view. If you
+    // want the query pre-filled too, follow the same `setActiveView` call
+    // with a globally-stored pending query in a future refactor.
+    void trimmed
+  }, [wikiSearchQuery, setActiveView])
+
+  const openResult = useCallback(
+    async (path: string) => {
+      setWikiSearchOpen(false)
+      try {
+        const content = await readFile(path)
+        openFileInPreview(path, content)
+      } catch (err) {
+        console.error("Failed to open wiki search result:", err)
+      }
+    },
+    [openFileInPreview],
+  )
 
   if (!selectedFile) {
     return (
@@ -103,15 +195,98 @@ export function PreviewPanel() {
   const fileName = externalPreview?.path === selectedFile
     ? externalPreview.title
     : getFileName(selectedFile)
+  const wikiSearchHighlight = tokenizeQuery(wikiSearchQuery)
+  const wikiSearchFallback = wikiSearchQuery.trim().toLowerCase()
+  const showWikiSearchResults =
+    wikiSearchOpen && wikiSearchQuery.trim().length > 0
+  // Drop the currently-open preview from the suggestion list so users
+  // don't see it as a "switch to itself" option.
+  const wikiSearchSuggestions = wikiSearchResults.filter(
+    (r) => normalizePath(r.path) !== normalizePath(selectedFile),
+  )
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b px-3 py-1.5">
+      <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
         <span className="truncate text-xs text-muted-foreground" title={selectedFile}>
           {fileName}
         </span>
+        <div className="relative shrink-0">
+          <input
+            type="text"
+            value={wikiSearchQuery}
+            onFocus={() => setWikiSearchOpen(true)}
+            onBlur={() => {
+              // Allow click handlers on suggestions to run before clearing.
+              setTimeout(() => setWikiSearchOpen(false), 120)
+            }}
+            onChange={(event) => {
+              setWikiSearchQuery(event.target.value)
+              setWikiSearchOpen(true)
+            }}
+            onKeyDown={(event) => {
+              if (isImeComposing(event)) return
+              if (event.key === "Enter") {
+                event.preventDefault()
+                if (wikiSearchSuggestions[0]) {
+                  void openResult(wikiSearchSuggestions[0].path)
+                  return
+                }
+                jumpToFullSearch()
+              } else if (event.key === "Escape") {
+                setWikiSearchQuery("")
+                setWikiSearchResults([])
+                setWikiSearchOpen(false)
+              }
+            }}
+            placeholder="Search wiki pages…"
+            aria-label="Search wiki pages"
+            className="w-56 rounded-md border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {showWikiSearchResults && (
+            <div className="absolute right-0 z-20 mt-1 w-80 max-h-72 overflow-auto rounded-md border bg-background p-1 text-xs shadow-lg">
+              {wikiSearchSuggestions.length === 0 ? (
+                <p className="px-2 py-2 text-muted-foreground">
+                  {`No results for "${wikiSearchQuery}"`}
+                </p>
+              ) : (
+                <>
+                  <ul className="space-y-0.5">
+                    {wikiSearchSuggestions.map((result) => (
+                      <li key={result.path}>
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => void openResult(result.path)}
+                          className="block w-full truncate rounded px-2 py-1 text-left text-foreground hover:bg-accent"
+                          title={result.path}
+                        >
+                          <span className="font-medium">
+                            {highlightMatch(result.title, wikiSearchHighlight, wikiSearchFallback)}
+                          </span>
+                          <span className="ml-2 text-[10px] text-muted-foreground">
+                            {result.path}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={jumpToFullSearch}
+                    className="mt-1 block w-full rounded border-t px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent"
+                  >
+                    {`Open full search for "${wikiSearchQuery.trim()}"`}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
         <button
           onClick={closePreview}
+          aria-label="Close preview"
           className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
         >
           <X className="h-3.5 w-3.5" />
@@ -141,6 +316,68 @@ export function PreviewPanel() {
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Wrap any matching tokens in `<mark>` so the suggestion list echoes
+ * the Search view's highlighting. Falls back to a plain lower-cased
+ * substring match when tokenization returned nothing (e.g. user typed
+ * only punctuation).
+ */
+function highlightMatch(text: string, tokens: string[], fallback: string) {
+  const matches: Array<{ start: number; end: number }> = []
+  if (tokens.length > 0) {
+    for (const token of tokens) {
+      if (!token) continue
+      let index = 0
+      while (index < text.length) {
+        const found = text.toLowerCase().indexOf(token, index)
+        if (found < 0) break
+        matches.push({ start: found, end: found + token.length })
+        index = found + Math.max(1, token.length)
+      }
+    }
+  } else if (fallback) {
+    let index = 0
+    while (index < text.length) {
+      const found = text.toLowerCase().indexOf(fallback, index)
+      if (found < 0) break
+      matches.push({ start: found, end: found + fallback.length })
+      index = found + Math.max(1, fallback.length)
+    }
+  }
+  if (matches.length === 0) return text
+  matches.sort((left, right) => left.start - right.start)
+  const filtered: Array<{ start: number; end: number }> = []
+  for (const range of matches) {
+    const last = filtered[filtered.length - 1]
+    if (last && range.start < last.end) {
+      last.end = Math.max(last.end, range.end)
+      continue
+    }
+    filtered.push(range)
+  }
+  const parts: Array<string | { kind: "mark"; text: string }> = []
+  let cursor = 0
+  for (const range of filtered) {
+    if (cursor < range.start) {
+      parts.push(text.slice(cursor, range.start))
+    }
+    parts.push({ kind: "mark", text: text.slice(range.start, range.end) })
+    cursor = range.end
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor))
+  }
+  return parts.map((part, idx) =>
+    typeof part === "string" ? (
+      <span key={`plain-${idx}`}>{part}</span>
+    ) : (
+      <mark key={`mark-${idx}`} className="bg-primary/20 text-foreground">
+        {part.text}
+      </mark>
+    ),
   )
 }
 

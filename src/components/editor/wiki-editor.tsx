@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import "katex/dist/katex.min.css"
-import { Pencil, Eye, Link2, Sparkles, X } from "lucide-react"
+import { Pencil, Eye, Link2, Sparkles, X, Trash2 } from "lucide-react"
 import { parseFrontmatter } from "@/lib/frontmatter"
 import { FrontmatterPanel } from "@/components/editor/frontmatter-panel"
 import { WikiReader } from "@/components/editor/wiki-reader"
@@ -8,7 +8,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { PageLinksPanel } from "@/components/editor/page-links-panel"
 import { useTranslation } from "react-i18next"
 import { buildWordDiff, findDomTextSelection, findUniqueTextSelection, normalizeEditableMarkdown, normalizeSelectionReplacement } from "@/lib/selection-edit"
-import { applyTextSelectionEdit, readFile } from "@/commands/fs"
+import { applyTextSelectionEdit, readFile, deleteFile } from "@/commands/fs"
 import { streamChat } from "@/lib/llm-client"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { searchWiki, type SearchResult } from "@/lib/search"
@@ -63,8 +63,16 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
   const readerRef = useRef<HTMLDivElement>(null)
   const selectionAbortRef = useRef<AbortController | null>(null)
   const selectionRunIdRef = useRef(0)
+  // Delete-state lives inside the editor because it sits next to the
+  // delete button in the top-right. `pendingDelete=true` shows the
+  // confirmation dialog; `deleting` disables the buttons while the
+  // filesystem call is in flight.
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deletingPage, setDeletingPage] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const project = useWikiStore((state) => state.project)
   const llmConfig = useWikiStore((state) => state.llmConfig)
+  const closePreview = useWikiStore((state) => state.closePreview)
 
   // Read mode renders frontmatter as UI plus the Markdown body. Edit mode uses
   // a plain-text Markdown editor for the full file so frontmatter can be edited
@@ -90,6 +98,39 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
   const saveLatestNow = useCallback(() => {
     onSave(latestMarkdownRef.current, { immediate: true })
   }, [onSave])
+
+  const performDeletePage = useCallback(async () => {
+    if (!filePath || !project || deletingPage) return
+    const projectPath = normalizePath(project.path)
+    const normalizedFile = normalizePath(filePath)
+    if (!normalizedFile.startsWith(`${projectPath}/wiki/`)) {
+      setDeleteError("Only pages inside the project's wiki/ folder can be deleted from the editor.")
+      return
+    }
+    setDeletingPage(true)
+    setDeleteError(null)
+    try {
+      await deleteFile(normalizedFile)
+      setDeleteDialogOpen(false)
+      setDeletingPage(false)
+      // After deletion, leave the preview so the user can pick the next page.
+      closePreview()
+      // Refresh the file tree asynchronously so the wiki sidebar / sources
+      // view reflect the deletion on next render. Don't await — failing the
+      // refresh shouldn't block the navigation we've already completed.
+      void (async () => {
+        try {
+          const { refreshProjectFileTree } = await import("@/lib/project-file-tree-refresh")
+          await refreshProjectFileTree(projectPath)
+        } catch (refreshErr) {
+          console.warn("Failed to refresh file tree after delete:", refreshErr)
+        }
+      })()
+    } catch (err) {
+      setDeletingPage(false)
+      setDeleteError(err instanceof Error ? err.message : String(err))
+    }
+  }, [filePath, project, deletingPage, closePreview])
 
   const captureSelection = useCallback((markdown: string, start: number, end: number) => {
     if (!filePath || start === end) {
@@ -359,6 +400,21 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
           {mode === "read" ? <Pencil className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
           {mode === "read" ? t("editor.edit") : t("editor.done")}
         </button>
+        {filePath && (
+          <button
+            type="button"
+            onClick={() => {
+              setDeleteError(null)
+              setDeleteDialogOpen(true)
+            }}
+            aria-label={t("editor.delete.label", { defaultValue: "Delete page" })}
+            title={t("editor.delete.label", { defaultValue: "Delete page" })}
+            className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-background/90 px-2 py-1 text-xs text-destructive shadow-sm hover:bg-destructive/10"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {t("editor.delete.label", { defaultValue: "Delete" })}
+          </button>
+        )}
       </div>
 
       {mode === "read" ? (
@@ -502,6 +558,63 @@ export function WikiEditor({ content, onSave, filePath }: WikiEditorProps) {
             </div>
           </footer>
         </aside>
+      )}
+      {deleteDialogOpen && filePath && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-label={t("editor.delete.confirmTitle", { defaultValue: "Delete page" })}
+          className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 px-6 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deletingPage) {
+              setDeleteDialogOpen(false)
+              setDeleteError(null)
+            }
+          }}
+        >
+          <div className="w-full max-w-md space-y-3 rounded-md border border-destructive/40 bg-background p-4 shadow-lg">
+            <div className="space-y-1">
+              <h3 className="text-sm font-semibold text-destructive">
+                {t("editor.delete.confirmTitle", { defaultValue: "Delete this page?" })}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {t("editor.delete.confirmBody", {
+                  defaultValue:
+                    "This removes the page from the project's wiki/ folder. Other pages that link here may break. This action cannot be undone in the editor.",
+                  path: filePath,
+                })}
+              </p>
+            </div>
+            {deleteError && (
+              <p className="rounded border border-destructive/40 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+                {deleteError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={deletingPage}
+                onClick={() => {
+                  setDeleteDialogOpen(false)
+                  setDeleteError(null)
+                }}
+                className="rounded-md border border-border bg-background px-3 py-1 text-xs text-foreground hover:bg-accent disabled:opacity-50"
+              >
+                {t("editor.delete.cancel", { defaultValue: "Cancel" })}
+              </button>
+              <button
+                type="button"
+                disabled={deletingPage}
+                onClick={() => void performDeletePage()}
+                className="rounded-md bg-destructive px-3 py-1 text-xs text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {deletingPage
+                  ? t("editor.delete.deleting", { defaultValue: "Deleting…" })
+                  : t("editor.delete.confirm", { defaultValue: "Delete" })}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

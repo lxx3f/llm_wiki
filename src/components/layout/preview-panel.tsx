@@ -189,14 +189,6 @@ export function PreviewPanel() {
     [openFileInPreview],
   )
 
-  if (!selectedFile) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a file to preview
-      </div>
-    )
-  }
-
   // Back / Forward shortcuts (Alt+ArrowLeft / Alt+ArrowRight) only
   // while the wiki preview itself is mounted — we attach the listener
   // here rather than at the App level so the keystrokes don't leak
@@ -204,7 +196,14 @@ export function PreviewPanel() {
   // bails when focus is inside an editable surface so the keys still
   // work in the inline wiki search box and any future in-page
   // contenteditable element.
+  //
+  // This effect MUST live above the `!selectedFile` early return —
+  // hooks called conditionally trigger React's "Rendered more hooks
+  // than during the previous render" error the moment the user opens
+  // the first page. The body re-checks `selectedFile` so the listener
+  // is only attached when the preview is actually open.
   useEffect(() => {
+    if (!selectedFile) return
     function onKeyDown(event: KeyboardEvent) {
       if (!event.altKey) return
       const target = event.target as HTMLElement | null
@@ -226,7 +225,15 @@ export function PreviewPanel() {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [historyCursor, pageHistory.length, goBack, goForward])
+  }, [selectedFile, historyCursor, pageHistory.length, goBack, goForward])
+
+  if (!selectedFile) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Select a file to preview
+      </div>
+    )
+  }
 
   const category = getFileCategory(selectedFile)
   const fileName = externalPreview?.path === selectedFile

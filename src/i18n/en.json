@@ -18,7 +18,8 @@
     "updateAvailableSuffix": " · update",
     "back": "Back",
     "forward": "Forward",
-    "missingHint": "Page does not exist: {{slug}}"
+    "missingHint": "Page does not exist: {{slug}}",
+    "openExternalHint": "Open in new tab"
   },
   "updateBanner": {
     "message": "Version {{version}} is available",

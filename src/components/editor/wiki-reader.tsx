@@ -4,8 +4,9 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import "katex/dist/katex.min.css"
-import { AlertTriangle } from "lucide-react"
+import { AlertTriangle, ExternalLink } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   collectWikilinkRefs,
   transformImageEmbeds,
@@ -138,6 +139,14 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
           a: ({ href, children, ...props }) => {
             const h = typeof href === "string" ? href : ""
             const isWikilink = h.startsWith("#")
+            // RFC 3986-style scheme detection. Matches `http:`, `https:`,
+            // `mailto:`, `ftp:`, `tel:`, `file:`, `data:`, etc. — anything
+            // that should leave the app via the system browser / handler
+            // instead of being loaded inside the WebView. Relative paths
+            // (`./foo`, `../bar`, `/abs`) and pure anchors (`#frag`) are
+            // explicitly NOT matched, so they keep their existing
+            // behaviour.
+            const isExternalUrl = /^[a-z][a-z0-9+.-]*:/i.test(h)
             const slug = isWikilink ? safeDecodeFragment(h.slice(1)) : null
             // Resolve the slug against the path index so unresolved
             // (broken) `[[wikilinks]]` render with the missing-link
@@ -148,13 +157,45 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
               ? "cursor-pointer text-muted-foreground line-through decoration-rose-500/60 underline-offset-2 hover:decoration-rose-500"
               : isWikilink
                 ? "cursor-pointer text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
-                : "text-primary underline underline-offset-2"
+                : isExternalUrl
+                  // inline-flex + items-baseline keeps the ExternalLink
+                  // icon aligned with the link text even when the text
+                  // wraps across lines (the gap keeps icon + text on
+                  // the same baseline without the underline cutting
+                  // through the icon).
+                  ? "inline-flex items-baseline gap-1 text-primary underline underline-offset-2 hover:text-primary/80"
+                  : "text-primary underline underline-offset-2"
             return (
               <a
                 href={h || undefined}
-                onClick={(e) => isWikilink && handleAnchorClick(e, h)}
-                title={isMissing ? t("nav.missingHint", { slug }) : undefined}
+                target={isExternalUrl ? "_blank" : undefined}
+                rel={isExternalUrl ? "noopener noreferrer" : undefined}
+                // Same routing pattern as settings/about-section.tsx:
+                // Tauri 2's WebView doesn't auto-delegate external
+                // clicks to the system browser — the opener plugin
+                // does. `target="_blank"` + `rel="noopener noreferrer"`
+                // stay as a defensive fallback in case `openUrl` rejects.
+                onClick={(e) => {
+                  if (isWikilink) {
+                    handleAnchorClick(e, h)
+                    return
+                  }
+                  if (isExternalUrl) {
+                    e.preventDefault()
+                    void openUrl(h).catch((err) => {
+                      console.error("[wiki-reader] openUrl failed:", err)
+                    })
+                  }
+                }}
+                title={
+                  isMissing
+                    ? t("nav.missingHint", { slug })
+                    : isExternalUrl
+                      ? t("nav.openExternalHint")
+                      : undefined
+                }
                 data-missing={isMissing ? "true" : undefined}
+                data-external={isExternalUrl ? "true" : undefined}
                 className={className}
                 {...props}
               >
@@ -165,6 +206,12 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
                   />
                 ) : null}
                 {children}
+                {isExternalUrl ? (
+                  <ExternalLink
+                    className="ml-0.5 inline h-3 w-3 shrink-0 align-baseline text-primary/70"
+                    aria-hidden
+                  />
+                ) : null}
               </a>
             )
           },

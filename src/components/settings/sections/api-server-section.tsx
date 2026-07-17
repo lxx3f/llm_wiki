@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager"
 import { apiServerStatus, mcpServerEntryPath } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -107,7 +108,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
   const handleCopyToken = useCallback(async () => {
     if (!draft.apiToken) return
     try {
-      await navigator.clipboard.writeText(draft.apiToken)
+      await writeClipboardText(draft.apiToken)
       setCopiedField("token")
       setTimeout(() => setCopiedField(null), 1500)
     } catch (err) {
@@ -155,7 +156,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
 
   const handleCopyCurl = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(sampleCurl)
+      await writeClipboardText(sampleCurl)
       setCopiedField("curl")
       setTimeout(() => setCopiedField(null), 1500)
     } catch (err) {
@@ -166,7 +167,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
   const handleCopyMcpConfig = useCallback(async () => {
     if (!mcpEntryPath) return
     try {
-      await navigator.clipboard.writeText(sampleMcpConfig)
+      await writeClipboardText(sampleMcpConfig)
       setCopiedField("mcp")
       setTimeout(() => setCopiedField(null), 1500)
     } catch (err) {

@@ -20,6 +20,19 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+# Raw Win32 clipboard + SetForegroundWindow calls. Needed on Windows
+# 11 24H2+/25H2 to make the Clipboard History service attribute writes
+# to llm-wiki.exe instead of msedgewebview2.exe — `arboard` alone writes
+# the data fine but the OS uses the foreground-window HWND + a
+# clipboard-format-listener registration to decide who contributes to
+# the Win+V history.
+windows = { version = "0.62", features = [
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_Foundation",
+] }
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2.5.1"
 serde = { version = "1", features = ["derive"] }
@@ -28,6 +41,17 @@ chrono = { version = "0.4", features = ["clock"] }
 tauri-plugin-dialog = "2.7.1"
 pdfium-render = "0.9"
 tauri-plugin-store = "2.4.2"
+# Bridges webview selection clipboard with the OS system clipboard so
+# Ctrl+C / Ctrl+V inside the app actually round-trips through the OS
+# clipboard and is reachable by other apps (browser, terminal, etc.)
+# on Windows / macOS / Linux. See capabilities/default.json for the
+# matching `clipboard-manager:default` permission grant.
+tauri-plugin-clipboard-manager = "2"
+# Direct arboard access for the foreground-aware clipboard write path
+# in src-tauri/src/clipboard_history.rs. Tauri-plugin-clipboard-manager
+# re-uses this under the hood but doesn't expose it, and we need to
+# pipe writes through our own IPC command with SetForegroundWindow.
+arboard = "3"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 # reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 reqwest = { version = "0.12", default-features = false, features = ["stream", "native-tls", "json"] }

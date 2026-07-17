@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react"
 import { Download, RefreshCw, CheckCircle2, Sparkles } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager"
 import { apiServerStatus, clipServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { API_SERVER_HEALTH_URL, API_SERVER_PORT } from "@/lib/api-server-constants"
@@ -272,7 +273,7 @@ function UpdateAvailableBanner({
     } catch (err) {
       console.error("[update-banner] openUrl failed:", err)
       try {
-        await navigator.clipboard.writeText(targetUrl)
+        await writeClipboardText(targetUrl)
         // eslint-disable-next-line no-alert
         alert(`Could not open browser. URL copied to clipboard:\n${targetUrl}`)
       } catch {

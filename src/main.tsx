@@ -4,6 +4,7 @@ import App from "./App";
 import "./index.css";
 import "@/i18n";
 import { loadAndApplyTheme, watchSystemTheme } from "@/lib/theme";
+import { installClipboardBridge } from "@/lib/init-clipboard";
 
 function applyPlatformClass() {
   const isTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
@@ -16,6 +17,10 @@ function applyPlatformClass() {
 async function initApp() {
   try {
     applyPlatformClass();
+    // Route webview copy/cut/paste through the Rust main process so
+    // Windows Clipboard History records writes from llm-wiki.exe (not
+    // msedgewebview2.exe). See src/lib/init-clipboard.ts.
+    installClipboardBridge();
     await loadAndApplyTheme();
     watchSystemTheme();
 

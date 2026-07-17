@@ -12,6 +12,7 @@ import {
   TrendingUp, Target, Sparkles, Image as ImageIcon, FileSearch, Terminal,
 } from "lucide-react"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { lastQueryPages } from "@/components/chat/chat-panel"
@@ -525,7 +526,7 @@ function CopyButton({ content }: { content: string }) {
       .replace(/<think(?:ing)?>\s*[\s\S]*$/gi, "")
       .trim()
 
-    await navigator.clipboard.writeText(clean)
+    await writeClipboardText(clean)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }, [content])

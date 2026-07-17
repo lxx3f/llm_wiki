@@ -11,6 +11,7 @@
     "opener:default",
     "dialog:default",
     "store:default",
+    "clipboard-manager:default",
     {
       "identifier": "http:default",
       "allow": [

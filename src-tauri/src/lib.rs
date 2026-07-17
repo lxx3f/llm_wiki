@@ -1,6 +1,7 @@
 mod agent;
 mod api_server;
 mod clip_server;
+mod clipboard_history;
 mod commands;
 mod cors;
 mod panic_guard;
@@ -613,6 +614,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -624,6 +626,14 @@ pub fn run() {
         // from Rust, never the webview.
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
+            // Register the main window with the OS Clipboard History
+            // service as a format listener so Win+V credits writes to
+            // llm-wiki.exe. Must happen as early as possible — before
+            // any agent tool, before any webview startup handshake —
+            // because Clipboard History's eligibility list is captured
+            // at app launch. See src-tauri/src/clipboard_history.rs.
+            clipboard_history::register_clipboard_history_listener(&app.handle());
+
             // Let the PDF extractor find the bundled pdfium dynamic
             // library via Tauri's platform-correct resource path.
             if let Ok(dir) = app.path().resource_dir() {
@@ -751,6 +761,14 @@ pub fn run() {
             commands::file_sync::ignore_file_change_task,
             set_proxy_env,
             set_close_behavior,
+            // Foreground-aware clipboard write that goes through
+            // llm-wiki.exe so Win11's Clipboard History (`Win+V`) picks
+            // up selection copies inside the app. The JS-side bridge
+            // (`src/lib/init-clipboard.ts`) calls this in preference to
+            // the generic `tauri-plugin-clipboard-manager` write because
+            // that path attributes writes to msedgewebview2.exe.
+            // See src-tauri/src/clipboard_history.rs.
+            clipboard_history::write_clipboard_text_for_history,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

@@ -187,11 +187,19 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
                     })
                   }
                 }}
+                // Always surface the actual link target on hover so the
+                // user can see where a click will land without having
+                // to inspect the DOM. For wikilinks we show the decoded
+                // slug (e.g. `[[foo bar]]` → "foo bar") instead of the
+                // raw `#foo%20bar` fragment. For everything else (URLs,
+                // relative paths, etc.) the href is shown verbatim.
+                // Missing wikilinks keep the more informative
+                // "Page does not exist: X" tooltip on top.
                 title={
                   isMissing
                     ? t("nav.missingHint", { slug })
-                    : isExternalUrl
-                      ? t("nav.openExternalHint")
+                    : h
+                      ? (isWikilink ? (slug ?? h.slice(1)) : h)
                       : undefined
                 }
                 data-missing={isMissing ? "true" : undefined}

@@ -18,8 +18,7 @@
     "updateAvailableSuffix": " · 有更新",
     "back": "返回",
     "forward": "前进",
-    "missingHint": "页面不存在：{{slug}}",
-    "openExternalHint": "在新标签页打开"
+    "missingHint": "页面不存在：{{slug}}"
   },
   "updateBanner": {
     "message": "新版本 {{version}} 已发布",

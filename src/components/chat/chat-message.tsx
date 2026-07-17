@@ -1317,6 +1317,72 @@ export function StreamingMessage({ content, agentEvents = [] }: StreamingMessage
   )
 }
 
+/**
+ * Tool-specific one-line summary extracted from a tool's `output`
+ * string so the collapsed Agent Activity row can hint at what the
+ * tool actually did without forcing the user to click for the full
+ * detail panel. Parses the backend-formatted string (e.g. the
+ * `[top results]` block emitted by `record_loop_tool_success` for
+ * search tools), not a structured payload — so this stays robust to
+ * backend format tweaks as long as the substring anchors hold.
+ */
+function derivePreview(tool: string, output: string): string | null {
+  if (!output) return null
+  const normalizedTool = tool.replace(/^mcp\.[^.]+\./, "")
+
+  if (
+    normalizedTool === "wiki.search"
+    || normalizedTool === "source.search"
+    || normalizedTool === "graph.search"
+    || normalizedTool === "web.search"
+    || normalizedTool === "anytxt.search"
+  ) {
+    // First "N. title · path" line from the [top results] block
+    const numbered = output.match(/^\d+\.\s+(.+)$/m)
+    if (numbered) return `→ ${numbered[1]}`
+    // No [top results] block — fall back to the count line so the
+    // user still sees the size of the empty / error result.
+    const first = output.split("\n").find((line) => line.trim().length > 0)
+    return first ? `→ ${first}` : null
+  }
+
+  if (normalizedTool === "shell.exec") {
+    // First non-empty line after the `stdout:` header, before
+    // `stderr:` or `exit=`. Truncated so a verbose first line
+    // doesn't blow up the collapsed row.
+    const lines = output.split("\n")
+    let inStdout = false
+    for (const line of lines) {
+      if (line.startsWith("stdout:")) {
+        inStdout = true
+        continue
+      }
+      if (line.startsWith("stderr:") || line.startsWith("Generated files:")) {
+        break
+      }
+      if (inStdout && line.trim().length > 0) {
+        return `→ ${truncateForPreview(line, 120)}`
+      }
+    }
+    return null
+  }
+
+  if (normalizedTool === "wiki.read_page" || normalizedTool === "skill.read_file") {
+    // First markdown heading in the read content — gives the user
+    // a "what's on this page" hint before expanding.
+    const heading = output.match(/^#+\s+(.+)$/m)
+    if (heading) return `→ ${heading[1]}`
+    return null
+  }
+
+  return null
+}
+
+function truncateForPreview(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  return `${value.slice(0, Math.max(0, maxChars - 1))}…`
+}
+
 function AgentActivity({ events, compact = false }: { events: ChatAgentEvent[]; compact?: boolean }) {
   const { t } = useTranslation()
   // Collapse consecutive tool_call + tool_result pairs for the same tool
@@ -1395,20 +1461,37 @@ function AgentActivity({ events, compact = false }: { events: ChatAgentEvent[]; 
               >
                 <Icon className={`h-3.5 w-3.5 ${active ? "animate-pulse" : ""}`} />
               </span>
-              <span className="min-w-0 flex-1 truncate">
-                {event.toolRaw ? (
-                  <code
-                    className="mr-1.5 rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] font-normal text-muted-foreground"
-                    title={t("chat.tool.name", { defaultValue: "Tool name" })}
-                  >
-                    {event.toolRaw}
-                  </code>
-                ) : null}
-                {event.message || t(`chat.agent.${event.stage}`)}
-                {event.query ? <span className="text-muted-foreground"> · {event.query}</span> : null}
-                {typeof event.count === "number" ? (
-                  <span className="text-muted-foreground"> · {t("chat.agent.resultCount", { count: event.count })}</span>
-                ) : null}
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate">
+                  {event.toolRaw ? (
+                    <code
+                      className="mr-1.5 rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] font-normal text-muted-foreground"
+                      title={t("chat.tool.name", { defaultValue: "Tool name" })}
+                    >
+                      {event.toolRaw}
+                    </code>
+                  ) : null}
+                  {event.message || t(`chat.agent.${event.stage}`)}
+                  {event.query ? <span className="text-muted-foreground"> · {event.query}</span> : null}
+                  {typeof event.count === "number" ? (
+                    <span className="text-muted-foreground"> · {t("chat.agent.resultCount", { count: event.count })}</span>
+                  ) : null}
+                </span>
+                {(() => {
+                  const preview =
+                    event.output && event.tool
+                      ? derivePreview(event.tool, event.output)
+                      : null
+                  if (!preview) return null
+                  return (
+                    <span
+                      className="truncate text-[11px] text-muted-foreground/80"
+                      title={preview}
+                    >
+                      {preview}
+                    </span>
+                  )
+                })()}
               </span>
               {event.timestamp && (
                 <time className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground/70">

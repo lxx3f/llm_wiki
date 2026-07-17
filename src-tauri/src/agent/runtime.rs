@@ -2583,8 +2583,13 @@ impl AgentRuntime {
                     .as_deref()
                     .or(action.query.as_deref())
                     .map(str::trim)
-                    .filter(|command| !command.is_empty())
-                    .ok_or_else(|| "shell.exec requires command".to_string())?;
+                    .filter(|command| !command.is_empty());
+                let command = match command {
+                    Some(c) => c.to_string(),
+                    None => {
+                        return Err(format_shell_exec_missing_command(&action));
+                    }
+                };
                 Ok(serde_json::json!({
                     "command": command,
                     "timeoutSeconds": action.timeout_seconds,
@@ -2621,13 +2626,14 @@ impl AgentRuntime {
                 let count = search.references.len();
                 let added = search
                     .references
-                    .into_iter()
+                    .iter()
                     .filter(|reference| {
-                        push_unique_reference(references, events, event_sink, reference.clone())
+                        push_unique_reference(references, events, event_sink, (*reference).clone())
                     })
                     .count();
+                let top_results = format_search_results_block(&search.references, 5);
                 Ok(format!(
-                    "{count} result(s), {added} new, mode={}, tokenHits={}, vectorHits={}, graphHits={}",
+                    "{count} result(s), {added} new, mode={}, tokenHits={}, vectorHits={}, graphHits={}{top_results}",
                     search.mode, search.token_hits, search.vector_hits, search.graph_hits
                 ))
             }
@@ -2636,12 +2642,13 @@ impl AgentRuntime {
                     .map_err(|err| format!("Invalid {tool} result: {err}"))?;
                 let count = found.len();
                 let added = found
-                    .into_iter()
+                    .iter()
                     .filter(|reference| {
-                        push_unique_reference(references, events, event_sink, reference.clone())
+                        push_unique_reference(references, events, event_sink, (*reference).clone())
                     })
                     .count();
-                Ok(format!("{count} result(s), {added} new"))
+                let top_results = format_search_results_block(&found, 5);
+                Ok(format!("{count} result(s), {added} new{top_results}"))
             }
             "wiki.read_page" => {
                 let path = value
@@ -2649,10 +2656,13 @@ impl AgentRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or("wiki page");
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
-                let mut summary = format!(
-                    "read {path}\n{}",
-                    trim_chars(&collapse_whitespace(content), 4_000)
-                );
+                // Preserve markdown structure (newlines, list indentation,
+                // code-fence boundaries) instead of collapsing all
+                // whitespace — otherwise the Agent Activity feed shows a
+                // single-line wall of text with headings/lists/code blocks
+                // indistinguishable. The cap is raised slightly (4K → 6K)
+                // to compensate for the extra whitespace overhead.
+                let mut summary = format!("read {path}\n{}", trim_chars(content, 6_000));
                 if let Some(context) = value
                     .get("knowledgeContext")
                     .filter(|value| !value.is_null())
@@ -2671,7 +2681,7 @@ impl AgentRuntime {
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
                 Ok(format!(
                     "read {skill}:{path}\n{}",
-                    trim_chars(&collapse_whitespace(content), 4_000)
+                    trim_chars(content, 6_000)
                 ))
             }
             "wiki.write_page" => {
@@ -2768,13 +2778,18 @@ impl AgentRuntime {
                             .join("\n")
                     )
                 };
+                // stdout / stderr caps raised from 8K / 4K so scripts
+                // like `python -c "import os, re; ...; print(hits)"`
+                // that emit thousands of lines (e.g. walking a large
+                // package and grepping for a symbol) aren't truncated
+                // before the user can see the relevant hits.
                 Ok(format!(
                     "`{}` exit={:?} timedOut={}\nstdout:\n{}\nstderr:\n{}",
                     output.command,
                     output.exit_code,
                     output.timed_out,
-                    trim_chars(&output.stdout, 8_000),
-                    trim_chars(&output.stderr, 4_000)
+                    trim_chars(&output.stdout, 20_000),
+                    trim_chars(&output.stderr, 10_000)
                 ) + &generated_summary)
             }
             _ => Ok(value.to_string()),
@@ -2848,6 +2863,97 @@ fn agent_structured_max_tokens(has_skills: bool) -> u32 {
     } else {
         AGENT_STRUCTURED_MAX_TOKENS
     }
+}
+
+/// Build the user-facing error for a `shell.exec` action that arrived
+/// without a non-empty `command` or `query`. Lists the field names the
+/// LLM actually populated (or `<none>`) so the user / debugger can see
+/// at a glance whether the model filled the wrong field (e.g. put the
+/// command under `path`) versus produced a fully-empty action.
+fn format_shell_exec_missing_command(action: &AgentLoopAction) -> String {
+    let received = [
+        ("command", action.command.is_some()),
+        ("query", action.query.is_some()),
+        ("path", action.path.is_some()),
+        ("content", action.content.is_some()),
+        ("title", action.title.is_some()),
+        ("skill", action.skill.is_some()),
+        ("fields", action.fields.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, present)| present.then(|| name))
+    .collect::<Vec<_>>()
+    .join(", ");
+    format!(
+        "shell.exec requires command (action had non-empty fields: [{}])",
+        if received.is_empty() {
+            "<none>".to_string()
+        } else {
+            received
+        }
+    )
+}
+
+/// Append a `[top results]` block listing up to N search hits as
+/// `N. title · path · score · snippet`. The Agent Activity feed and
+/// the click-to-expand detail panel share the same output string,
+/// so embedding the actual results here gives the user visible
+/// evidence of what the search returned instead of just a count line.
+///
+/// Snippet is truncated to 200 chars (multi-line collapses to single
+/// line) so a hit with a long abstract doesn't dominate the block.
+fn format_search_results_block(references: &[AgentReference], max: usize) -> String {
+    if references.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n[top results]");
+    for (i, reference) in references.iter().take(max).enumerate() {
+        let score = reference
+            .score
+            .map(|s| format!(" · score={:.2}", s))
+            .unwrap_or_default();
+        let snippet = reference
+            .snippet
+            .as_deref()
+            .map(|s| {
+                let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+                let truncated = truncate_chars(&flat, 200);
+                format!("\n  \"{}\"", truncated)
+            })
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "\n{}. {} · {}{}{}",
+            i + 1,
+            reference.title,
+            reference.path,
+            score,
+            snippet,
+        ));
+    }
+    out
+}
+
+/// Char-based string truncation with an ellipsis suffix when the
+/// input exceeds `max_chars`. Used by `format_search_results_block`
+/// to cap snippet previews so a single hit can't dominate the block.
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut count = 0usize;
+    let mut end = 0usize;
+    for (idx, _) in value.char_indices() {
+        if count == max_chars.saturating_sub(1) {
+            end = idx;
+            break;
+        }
+        count += 1;
+        end = idx;
+    }
+    if count < max_chars - 1 {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(end + 1);
+    out.push_str(&value[..end]);
+    out.push('…');
+    out
 }
 
 fn is_shell_approval_required_observation(observation: &AgentObservation) -> bool {
@@ -3412,6 +3518,12 @@ fn build_agent_loop_user(
         }
         if shell_listed {
             out.push_str("- shell.exec: run a shell command for code research, library introspection, or any command-line work the user asks for. Workspace-local commands run directly. With Enhanced shell mode enabled (the default in Settings), common dev tools (cat, head, grep, rg, sed, awk, find, jq, python, pip, uv, git, node, npm, cargo, go, etc.) also run without per-call prompts even when arguments reference external files; only network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), destructive system paths, and shell substitution always require approval. Prefer shell.exec over web.search when the user asks about a locally installed Python library (e.g. \"查一下本地的transformers库是否集成了X\") — use `python -c \"import inspect; ...\"` or `rg <symbol>` to read the on-disk source directly. Note: shell.exec no longer requires an active skill when Enhanced shell mode is on.\n");
+            out.push_str("\nTool action JSON schema — every tool call MUST use the field name listed below; filling the wrong field (e.g. putting the command under `path` or `content`) is rejected with `shell.exec requires command (action had non-empty fields: [...])`. Use `command` for shell commands, `query` for searches, `path` for file reads/writes:\n");
+            out.push_str("```json\n");
+            out.push_str("{\"action\":\"tool\",\"tool\":\"shell.exec\",\"command\":\"python -c \\\"import transformers; print(transformers.__version__)\\\"}\n");
+            out.push_str("{\"action\":\"tool\",\"tool\":\"wiki.search\",\"query\":\"transformers\"}\n");
+            out.push_str("{\"action\":\"tool\",\"tool\":\"wiki.read_page\",\"path\":\"wiki/transformers.md\"}\n");
+            out.push_str("```\n");
         }
     }
     if observations.is_empty() {

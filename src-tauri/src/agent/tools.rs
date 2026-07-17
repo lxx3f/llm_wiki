@@ -265,7 +265,34 @@ impl ToolRegistry for BuiltinToolRegistry {
                         .get("command")
                         .or_else(|| input.get("query"))
                         .and_then(Value::as_str)
-                        .ok_or_else(|| "shell.exec requires command".to_string())?;
+                        .ok_or_else(|| {
+                            // Mirror the runtime.rs helper so the registry
+                            // path also surfaces which input keys were
+                            // actually present — helps debug tools that
+                            // invoke shell.exec via tool_registry.execute
+                            // (rather than the agent loop) and arrive
+                            // with the wrong field name.
+                            let received = [
+                                ("command", input.get("command").is_some()),
+                                ("query", input.get("query").is_some()),
+                                ("path", input.get("path").is_some()),
+                                ("content", input.get("content").is_some()),
+                                ("title", input.get("title").is_some()),
+                                ("skill", input.get("skill").is_some()),
+                            ]
+                            .into_iter()
+                            .filter_map(|(name, present)| present.then(|| name))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                            format!(
+                                "shell.exec requires command (input had fields: [{}])",
+                                if received.is_empty() {
+                                    "<none>".to_string()
+                                } else {
+                                    received
+                                }
+                            )
+                        })?;
                     let timeout_secs = input
                         .get("timeoutSeconds")
                         .or_else(|| input.get("timeout_seconds"))

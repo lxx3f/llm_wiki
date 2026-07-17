@@ -1726,7 +1726,8 @@ fn handle_chat(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
         runtime_config.anytxt,
         runtime_config.external_mcp,
         app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
-    );
+    )
+    .with_enhanced_shell_mode(runtime_config.enhanced_shell_mode);
     let user_message_for_session = req.message.clone();
     let persist_session = req.persist_session;
     let session_id = req.session_id.clone().unwrap_or_default();
@@ -1802,11 +1803,17 @@ struct AgentRuntimeConfig {
     web_search: Option<agent::tools::WebSearchConfig>,
     anytxt: Option<agent::tools::AnyTxtConfig>,
     external_mcp: Option<agent::mcp_client::ExternalMcpRuntimeConfig>,
+    /// Mirrors `agent.enhancedShellMode` from `app-state.json`. See the
+    /// matching field in `lib.rs::AgentRuntimeConfig`.
+    enhanced_shell_mode: bool,
 }
 
 fn load_agent_runtime_config(app: &AppHandle) -> AgentRuntimeConfig {
     let Some(parsed) = load_app_state(app) else {
-        return AgentRuntimeConfig::default();
+        return AgentRuntimeConfig {
+            enhanced_shell_mode: true,
+            ..Default::default()
+        };
     };
     AgentRuntimeConfig {
         embedding: parsed
@@ -1830,6 +1837,14 @@ fn load_agent_runtime_config(app: &AppHandle) -> AgentRuntimeConfig {
             .get("externalMcpConfig")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok()),
+        // Default ON when absent so existing app-state.json keeps the
+        // Enhanced shell mode behavior.
+        enhanced_shell_mode: parsed
+            .get("agent")
+            .and_then(Value::as_object)
+            .and_then(|agent| agent.get("enhancedShellMode"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
     }
 }
 

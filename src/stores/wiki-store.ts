@@ -404,6 +404,15 @@ interface WikiState {
   mineruConfig: MineruConfig
   apiConfig: ApiConfig
   generalConfig: GeneralConfig
+  /**
+   * Whether the Chat Agent's `shell.exec` may auto-approve common dev tools
+   * (cat, grep, rg, python, pip, uv, git, node, npm, cargo, etc.) without
+   * per-call confirmation. Network clients, privilege escalation, and
+   * destructive system paths always require approval regardless. The Rust
+   * runtime reads this from `app-state.json` under the `agent` key at
+   * startup; this store value is the UI-side mirror. Default `true`.
+   */
+  enhancedShellMode: boolean
   graphUiState: GraphUiState
   dataVersion: number
 
@@ -423,6 +432,7 @@ interface WikiState {
   setActivePresetId: (id: string | null) => void
   setSearchApiConfig: (config: SearchApiConfig) => void
   setExternalMcpConfig: (config: ExternalMcpConfig) => void
+  setEnhancedShellMode: (enabled: boolean) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
   setMultimodalConfig: (config: MultimodalConfig) => void
   setOutputLanguage: (lang: OutputLanguage) => void
@@ -527,6 +537,8 @@ export const useWikiStore = create<WikiState>((set) => ({
 
   externalMcpConfig: DEFAULT_EXTERNAL_MCP_CONFIG,
 
+  enhancedShellMode: true,
+
   embeddingConfig: {
     enabled: false,
     endpoint: "",
@@ -596,6 +608,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setActivePresetId: (activePresetId) => set({ activePresetId }),
   setSearchApiConfig: (searchApiConfig) => set({ searchApiConfig }),
   setExternalMcpConfig: (externalMcpConfig) => set({ externalMcpConfig }),
+  setEnhancedShellMode: (enhancedShellMode) => set({ enhancedShellMode }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
   setMultimodalConfig: (multimodalConfig) => set({ multimodalConfig }),
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),

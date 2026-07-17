@@ -104,6 +104,7 @@ function initialDraft(
   mineru: ReturnType<typeof useWikiStore.getState>["mineruConfig"],
   apiConfig: ReturnType<typeof useWikiStore.getState>["apiConfig"],
   generalConfig: ReturnType<typeof useWikiStore.getState>["generalConfig"],
+  enhancedShellMode: boolean,
   maxHistoryMessages: number,
   uiLanguage: string,
   projectPath?: string,
@@ -172,6 +173,7 @@ function initialDraft(
     autostart: generalConfig.autostart,
     closeBehavior: generalConfig.closeBehavior,
     unlimitedAgentIterations: generalConfig.unlimitedAgentIterations,
+    enhancedShellMode,
     uiLanguage,
     theme: theme ?? "system",
     zoomLevel: zoomLevel ?? useZoomStore.getState().level,
@@ -201,6 +203,8 @@ export function SettingsView() {
   const setApiConfig = useWikiStore((s) => s.setApiConfig)
   const generalConfig = useWikiStore((s) => s.generalConfig)
   const setGeneralConfig = useWikiStore((s) => s.setGeneralConfig)
+  const enhancedShellMode = useWikiStore((s) => s.enhancedShellMode)
+  const setEnhancedShellMode = useWikiStore((s) => s.setEnhancedShellMode)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
   const setMaxHistoryMessages = useChatStore((s) => s.setMaxHistoryMessages)
   // Drives the red dot next to the "About" row in the settings
@@ -229,6 +233,7 @@ export function SettingsView() {
       mineruConfig,
       apiConfig,
       generalConfig,
+      enhancedShellMode,
       maxHistoryMessages,
       i18n.language,
       project?.path,
@@ -286,6 +291,7 @@ export function SettingsView() {
         mineruConfig,
         apiConfig,
         generalConfig,
+        enhancedShellMode,
         maxHistoryMessages,
         prev.uiLanguage,
         project?.path,
@@ -304,6 +310,7 @@ export function SettingsView() {
     mineruConfig,
     apiConfig,
     generalConfig,
+    enhancedShellMode,
     maxHistoryMessages,
     project,
   ])
@@ -339,6 +346,8 @@ export function SettingsView() {
       loadApiConfig,
       saveGeneralConfig,
       loadGeneralConfig,
+      saveEnhancedShellMode,
+      loadEnhancedShellMode,
       saveZoomLevel,
       loadZoomLevel,
     } = await import("@/lib/project-store")
@@ -486,6 +495,14 @@ export function SettingsView() {
         console.warn("[api] failed to reload API server config cache:", err)
       }
 
+      // The Rust `AgentRuntime` reads `agent.enhancedShellMode` from the
+      // same `app-state.json` on each agent_start_turn call (see
+      // `load_agent_runtime_config` in src-tauri/src/lib.rs and
+      // src-tauri/src/api_server.rs), so a save here propagates without a
+      // restart on the very next chat turn.
+      setEnhancedShellMode(draft.enhancedShellMode)
+      await saveEnhancedShellMode(draft.enhancedShellMode)
+
       await saveGeneralConfig(newGeneralConfig)
       try {
         if (newGeneralConfig.autostart) {
@@ -539,6 +556,7 @@ export function SettingsView() {
           persistedApi,
           persistedGeneral,
           persistedZoom,
+          persistedEnhancedShellMode,
         ] = await Promise.allSettled([
           loadLlmConfig(),
           loadEmbeddingConfig(),
@@ -551,6 +569,7 @@ export function SettingsView() {
           loadApiConfig(),
           loadGeneralConfig(),
           loadZoomLevel(),
+          loadEnhancedShellMode(),
         ] as const)
         setLlmConfig(resultValue(persistedLlm, null) ?? llmConfig)
         setEmbeddingConfig(resultValue(persistedEmbedding, null) ?? embeddingConfig)
@@ -563,6 +582,7 @@ export function SettingsView() {
         setMineruConfig(resultValue(persistedMineru, null) ?? mineruConfig)
         setApiConfig(resultValue(persistedApi, null) ?? apiConfig)
         setGeneralConfig(resultValue(persistedGeneral, generalConfig))
+        setEnhancedShellMode(resultValue(persistedEnhancedShellMode, enhancedShellMode))
         useZoomStore.getState().setLevel(resultValue(persistedZoom, useZoomStore.getState().level))
       } catch (reloadErr) {
         console.warn("[settings] failed to reload persisted settings after save failure:", reloadErr)
@@ -582,6 +602,7 @@ export function SettingsView() {
     mineruConfig,
     apiConfig,
     generalConfig,
+    enhancedShellMode,
     maxHistoryMessages,
     setLlmConfig,
     setEmbeddingConfig,
@@ -593,6 +614,7 @@ export function SettingsView() {
     setMineruConfig,
     setApiConfig,
     setGeneralConfig,
+    setEnhancedShellMode,
     setMaxHistoryMessages,
     currentTheme,
   ])

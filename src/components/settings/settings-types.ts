@@ -74,6 +74,13 @@ export interface SettingsDraft {
   closeBehavior: CloseBehavior
   // Agent behavior
   unlimitedAgentIterations: boolean
+  /**
+   * When true, the Chat Agent's `shell.exec` may auto-approve common dev
+   * tools (cat, grep, rg, python, pip, uv, git, node, npm, cargo, etc.)
+   * without per-call confirmation. Network clients, privilege escalation,
+   * and destructive system paths always require approval regardless.
+   */
+  enhancedShellMode: boolean
 
   // Source folder auto watch
   sourceWatchConfig: SourceWatchConfig

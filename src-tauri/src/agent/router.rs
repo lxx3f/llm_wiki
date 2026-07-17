@@ -25,6 +25,12 @@ pub struct RouterDecision {
     pub should_search_wiki: bool,
     pub should_hint_web: bool,
     pub should_hint_anytxt: bool,
+    /// True when the user explicitly asked about a local / installed Python
+    /// library or package. Triggers a tool-policy line that nudges the model
+    /// planner toward `shell.exec` (python -c "import inspect; ..." / rg)
+    /// rather than `web.search`, which would otherwise return generic
+    /// documentation instead of the user's installed source.
+    pub should_hint_shell: bool,
     pub should_include_sources: bool,
     pub rationale: String,
 }
@@ -62,6 +68,40 @@ pub fn route_query(message: &str, mode: AgentMode, tools: &AgentToolOptions) -> 
         &lower,
         &["write to wiki", "create page", "写入", "创建页面"],
     );
+    // "本地的X库" / "locally installed X" / site-packages references are a
+    // strong signal that the user wants the model to introspect an installed
+    // Python package via shell.exec rather than search the public web. Match
+    // broadly on the local/installed phrasing; the model planner uses this
+    // hint alongside the explicit tool policy line in context.rs.
+    let explicit_local_shell = contains_any(
+        &lower,
+        &[
+            "本地",
+            "本地代码",
+            "本地库",
+            "本地源码",
+            "本地文件",
+            "本地装",
+            "本地安装",
+            "本地集成",
+            "已安装",
+            "本地版本",
+            "site-packages",
+            "sitepackages",
+            "site packages",
+            "local library",
+            "local libraries",
+            "local source",
+            "local code",
+            "local package",
+            "local packages",
+            "locally installed",
+            "installed package",
+            "installed library",
+            "installed packages",
+            "installed libraries",
+        ],
+    );
     let conversational = trimmed.len() < 32
         && contains_any(
             &lower,
@@ -94,6 +134,7 @@ pub fn route_query(message: &str, mode: AgentMode, tools: &AgentToolOptions) -> 
         should_search_wiki,
         should_hint_web: tools.web,
         should_hint_anytxt: tools.anytxt,
+        should_hint_shell: explicit_local_shell,
         should_include_sources: explicit_raw || matches!(mode, AgentMode::Deep),
         rationale: match intent {
             QueryIntent::NeedsExternalSearch => {
@@ -151,5 +192,61 @@ mod tests {
         );
         assert_eq!(decision.intent, QueryIntent::Ambiguous);
         assert!(!decision.should_search_wiki);
+    }
+
+    #[test]
+    fn router_hints_shell_for_local_library_queries() {
+        // The exact user-reported case: asking about a local Python library
+        // should set should_hint_shell so the model planner uses shell.exec
+        // instead of defaulting to web.search.
+        let decision = route_query(
+            "查一下本地的transformers库是否集成了minimaxm3",
+            AgentMode::Standard,
+            &AgentToolOptions {
+                wiki: true,
+                web: true,
+                anytxt: false,
+            },
+        );
+        assert!(
+            decision.should_hint_shell,
+            "router must flag local-library queries for shell.exec"
+        );
+
+        // English phrasing.
+        let decision_en = route_query(
+            "Does the locally installed transformers library integrate minimaxm3?",
+            AgentMode::Standard,
+            &AgentToolOptions::default(),
+        );
+        assert!(decision_en.should_hint_shell);
+
+        // site-packages reference.
+        let decision_site = route_query(
+            "List the classes under site-packages/transformers/models/auto",
+            AgentMode::Standard,
+            &AgentToolOptions::default(),
+        );
+        assert!(decision_site.should_hint_shell);
+    }
+
+    #[test]
+    fn router_does_not_hint_shell_for_generic_questions() {
+        // Plain queries about a library without local/installed phrasing
+        // should not fire the shell hint — web.search remains the right
+        // tool for general documentation lookups.
+        let decision = route_query(
+            "What does the transformers library do?",
+            AgentMode::Standard,
+            &AgentToolOptions::default(),
+        );
+        assert!(!decision.should_hint_shell);
+
+        let decision_zh = route_query(
+            "transformers 库是做什么的？",
+            AgentMode::Standard,
+            &AgentToolOptions::default(),
+        );
+        assert!(!decision_zh.should_hint_shell);
     }
 }

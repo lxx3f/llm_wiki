@@ -198,16 +198,22 @@ function backendToolToAgentStep(event: BackendAgentToolEvent, index: number) {
     }
   }
   const tool = normalizeBackendToolName(event.tool)
+  // Preserve input/output separately so the persisted row, when later
+  // surfaced by SavedAgentActivity, can also expand.
+  const isStart = event.status === "started"
   return {
     id: `backend-${index}-${event.tool}-${event.status}`,
     type: event.status === "started" ? "tool_call" as const : "tool_result" as const,
     tool,
+    toolRaw: event.tool,
     message: event.detail ?? event.tool,
     status: event.status === "failed" ? "error" as const
       : event.status === "available" ? "skipped" as const
         : event.status === "started" ? "running" as const
           : "success" as const,
     timestamp: event.timestamp,
+    input: isStart ? event.detail : undefined,
+    output: !isStart ? event.detail : undefined,
   }
 }
 
@@ -258,15 +264,27 @@ function backendToolToAgentEvent(event: BackendAgentToolEvent): ChatAgentEvent {
             : tool === "wiki_search" ? "searching_wiki"
               : event.status === "started" ? "tool_call"
                 : "tool_result"
+  // toolStart events carry the agent's input payload (path / query / command
+  // / …); toolEnd events carry the agent's output summary. We preserve
+  // them as separate fields on the UI event so the activity row's
+  // click-to-expand panel can render them verbatim. The renderer is
+  // responsible for merging start + end into a single row.
+  const isStart = event.status === "started"
   return {
     stage,
     tool,
+    // Preserve the original backend tool id so the UI can show
+    // "wiki.read_page" / "shell.exec" / "mcp.minimax.search" exactly as
+    // named in the agent's tool list, not just the 8-category enum.
+    toolRaw: event.tool,
     message: event.detail ?? event.tool,
     status: event.status === "failed" ? "error"
       : event.status === "started" ? "running"
         : event.status === "available" ? "skipped"
           : "success",
     timestamp: event.timestamp,
+    input: isStart ? event.detail : undefined,
+    output: !isStart ? event.detail : undefined,
   }
 }
 
@@ -356,6 +374,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   const projectPathIndex = useWikiStore((s) => s.projectPathIndex)
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const searchApiConfig = useWikiStore((s) => s.searchApiConfig)
+  const enhancedShellMode = useWikiStore((s) => s.enhancedShellMode)
   const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt)
   const imageInputAvailable = supportsImageInput(llmConfig)
   const availableContextFiles = useMemo(() => {
@@ -379,6 +398,15 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   const bottomRef = useRef<HTMLDivElement>(null)
   const [agentEvents, setAgentEvents] = useState<ChatAgentEvent[]>([])
   const [referencePreview, setReferencePreview] = useState<ChatReferencePreview | null>(null)
+  // True once the user has dismissed (or acknowledged) the Enhanced shell
+  // banner for the active conversation. Reset to false whenever the user
+  // switches to a different conversation so a fresh session can show the
+  // banner again the first time it invokes `shell.exec`.
+  const [enhancedShellBannerDismissed, setEnhancedShellBannerDismissed] = useState(false)
+  // Tracks whether the banner has been surfaced for the current
+  // conversation. Set true the first time `shell.exec` runs under
+  // `enhancedShellMode`; persisted only for the lifetime of this component.
+  const [enhancedShellBannerShownForConv, setEnhancedShellBannerShownForConv] = useState(false)
   const [generatedOutputPreviews, setGeneratedOutputPreviews] = useState<ChatReferencePreview[]>([])
   const [generatedOutputPreview, setGeneratedOutputPreview] = useState<ChatReferencePreview | null>(null)
   const [referencePreviewWidth, setReferencePreviewWidth] = useState(420)
@@ -464,6 +492,10 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     setGeneratedOutputPreviews([])
     setGeneratedOutputPreview(null)
     dismissedGeneratedOutputsKeyRef.current = null
+    // Reset the per-conversation Enhanced shell banner so a new session can
+    // surface it once on its first `shell.exec` invocation.
+    setEnhancedShellBannerDismissed(false)
+    setEnhancedShellBannerShownForConv(false)
   }, [activeConversationId])
 
   useEffect(() => {
@@ -813,6 +845,16 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
               }
               backendEvents.push(toolEvent)
               setAgentEvents((prev) => [...prev, backendToolToAgentEvent(toolEvent)].slice(-6))
+              // Surface the Enhanced shell banner exactly once per
+              // conversation, the first time the agent actually runs
+              // `shell.exec` (not on every toolStart of every tool). The
+              // banner is purely informational — it does not block the run.
+              if (
+                agentEvent.tool === "shell.exec" &&
+                useWikiStore.getState().enhancedShellMode
+              ) {
+                setEnhancedShellBannerShownForConv(true)
+              }
               return
             }
             if (agentEvent.type === "toolEnd" && agentEvent.tool) {
@@ -1394,6 +1436,38 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           </div>
           ) : (
             <>
+              {enhancedShellMode && enhancedShellBannerShownForConv && !enhancedShellBannerDismissed && (
+                <div
+                  data-testid="enhanced-shell-banner"
+                  className="flex items-start gap-2 border-b border-sky-500/30 bg-sky-500/5 px-3 py-2 text-xs"
+                  role="status"
+                >
+                  <span className="mt-0.5 inline-block h-2 w-2 flex-shrink-0 rounded-full bg-sky-500" aria-hidden />
+                  <div className="min-w-0 flex-1 leading-snug">
+                    <div className="font-medium">
+                      {t("chat.enhancedShell.bannerTitle", {
+                        defaultValue: "Enhanced shell mode active",
+                      })}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {t("chat.enhancedShell.bannerBody", {
+                        defaultValue:
+                          "Common dev tools (python, pip, uv, git, rg, grep, cat, node, npm, cargo, …) run without per-call prompts. Network clients, sudo, destructive system paths and shell substitution still require approval. Manage in Settings → General.",
+                      })}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEnhancedShellBannerDismissed(true)}
+                    className="flex-shrink-0 rounded px-2 py-1 text-muted-foreground hover:bg-sky-500/10 hover:text-foreground"
+                    aria-label={t("chat.enhancedShell.bannerDismiss", {
+                      defaultValue: "Dismiss",
+                    })}
+                  >
+                    {t("chat.enhancedShell.bannerDismiss", { defaultValue: "Dismiss" })}
+                  </button>
+                </div>
+              )}
               <div
                 ref={scrollContainerRef}
                 className="flex-1 overflow-y-auto px-3 py-2"

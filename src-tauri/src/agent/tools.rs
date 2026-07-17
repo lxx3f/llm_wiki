@@ -904,9 +904,25 @@ async fn run_shell_exec(
     let before_files = snapshot_workspace_files(&workspace);
     #[cfg(windows)]
     let mut child = {
-        let shell = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd".into());
-        let mut cmd = Command::new(shell);
-        cmd.args(["/C", command]);
+        // Prefer Git Bash when it's available — it gives the agent a real
+        // POSIX-ish environment (rg, sed/awk semantics, $() substitution
+        // behavior, /usr/bin paths), which is what most Python/Rust/JS
+        // toolchains are designed against. Fall back to cmd.exe if bash
+        // isn't on PATH so the feature degrades cleanly on machines that
+        // don't have Git for Windows installed.
+        let bash_program = resolve_git_bash_program().unwrap_or_else(|| {
+            std::env::var_os("ComSpec").unwrap_or_else(|| "cmd".into())
+        });
+        let using_bash = program_path_looks_like_bash(&bash_program);
+        let mut cmd = Command::new(bash_program);
+        if using_bash {
+            // Git Bash expects `-c` (single-letter) on Windows just like
+            // on POSIX. `bash.exe` from msys2/git-for-windows accepts both
+            // styles, but `-c` is portable.
+            cmd.args(["-c", command]);
+        } else {
+            cmd.args(["/C", command]);
+        }
         cmd
     };
     #[cfg(not(windows))]
@@ -1161,6 +1177,87 @@ where
         text = trim_text(&text, max_chars);
     }
     text
+}
+
+#[cfg(windows)]
+fn resolve_git_bash_program() -> Option<std::ffi::OsString> {
+    // Probe PATH (and a couple of well-known install roots) for bash.exe.
+    // Returning Some(...) means "we found a shell that isn't cmd.exe and
+    // we'll use POSIX-style `-c` to dispatch the command". The fallback
+    // to ComSpec in `run_shell_exec` covers the not-found case.
+    let candidates = ["bash.exe", "bash"];
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for candidate in candidates {
+                let full = dir.join(candidate);
+                if full.is_file() {
+                    return Some(full.into_os_string());
+                }
+            }
+        }
+    }
+    // Common fixed install roots (Git for Windows, msys2 standalone, WSL
+    // shim). These are last-resort fallbacks because PATH is normally
+    // authoritative.
+    let roots = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\Program Files\Git\mingw64\bin\bash.exe",
+    ];
+    for root in roots {
+        if Path::new(root).is_file() {
+            return Some(std::ffi::OsString::from(root));
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn program_path_looks_like_bash(program: &std::ffi::OsStr) -> bool {
+    let lower = program.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with("bash.exe") || lower.ends_with("bash")
+}
+
+#[cfg(test)]
+mod shell_program_tests {
+    use super::{program_path_looks_like_bash, resolve_git_bash_program};
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_git_bash_program_finds_bash_on_windows_when_present() {
+        // If bash is genuinely on PATH (CI runners with Git for Windows,
+        // dev machines with msys2, etc.), this returns Some(...). If not,
+        // we accept None — the feature degrades to ComSpec via cmd.
+        let resolved = resolve_git_bash_program();
+        if let Some(path) = resolved {
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            assert!(
+                lower.ends_with("bash.exe") || lower.ends_with("bash"),
+                "expected bash path, got {path:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn program_path_looks_like_bash_recognizes_bash_forms() {
+        use std::ffi::OsStr;
+
+        assert!(program_path_looks_like_bash(OsStr::new("C:/Program Files/Git/bin/bash.exe")));
+        assert!(program_path_looks_like_bash(OsStr::new("bash.exe")));
+        assert!(program_path_looks_like_bash(OsStr::new("bash")));
+        assert!(!program_path_looks_like_bash(OsStr::new("C:/Windows/System32/cmd.exe")));
+        assert!(!program_path_looks_like_bash(OsStr::new("pwsh.exe")));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_git_bash_program_is_only_defined_on_windows() {
+        // On non-Windows hosts the helper isn't compiled; this is a
+        // placeholder so the test binary still has something to run.
+        let _ = std::env::var("PATH");
+    }
 }
 
 pub async fn run_web_search(

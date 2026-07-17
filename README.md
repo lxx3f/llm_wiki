@@ -250,11 +250,11 @@ The original has a single query interface. We built **full multi-conversation su
 
 Not in the original. Chat now runs through a Rust backend Agent runtime rather than a browser-only TypeScript loop:
 
-- **Tool-using Agent** — can choose wiki search, source search, graph search, web search, AnyTXT, workspace file tools, approved shell commands, and skill file reads
+- **Tool-using Agent** — can choose wiki search, source search, graph search, web search, AnyTXT, workspace file tools, approved shell commands (with Enhanced shell mode bypassing per-call approval for common dev tools like `python`, `rg`, `git`, `cat`, `node`, `npm`, `cargo`, etc.), and skill file reads
 - **Skill management** — scan project and user skill folders, enable or disable skills, and pick a skill per conversation with `/skill` completion
 - **Generated workspace outputs** — files produced by Agent tools are kept under `agent-workspace/`, shown as generated outputs, and can be previewed or opened from the chat
 - **User interaction forms** — skills can ask for structured user input such as single choice, multiple choice, or free text without hardcoding skill-specific UI
-- **Safer execution model** — project workspace commands can continue smoothly, while external shell commands still require explicit approval
+- **Enhanced shell mode (default ON)** — gives the agent a code-agent-style shell: `python -c "import inspect; ..."`, `rg <symbol>`, `git log`, etc. run without popup interruptions; network clients (`curl`/`wget`/`ssh`/`scp`), privilege escalation, destructive system paths, and `$(...)` substitution still always require explicit approval. On Windows the shell defaults to Git Bash when available (falls back to `cmd.exe`). Toggle in Settings → General.
 - **Gated Wiki overwrites** — in the default "confirm every overwrite" mode, the Agent must request a single-use, project-and-session-bound pending write before modifying an existing wiki page; the UI shows a confirmation card with path and content preview, only writes on user approval, and records a real (undoable) Agent file-activity entry. Switching to "direct writes in this conversation" skips the prompt for that session
 
 ### 10. Thinking / Reasoning Display

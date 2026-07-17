@@ -52,6 +52,77 @@ const MAX_USER_INPUT_OPTIONS: usize = 8;
 const MAX_USER_INPUT_TEXT_CHARS: usize = 400;
 const SHELL_APPROVAL_REQUIRED_OBSERVATION: &str = "shell.exec.approval_required";
 
+/// Binaries whose invocations are allowed without a per-call approval when
+/// `enhanced_shell_mode` is on. The first whitespace-separated token of the
+/// command is matched against the basename of each entry (so `/usr/bin/python`
+/// matches `python`). The list intentionally excludes any program that can
+/// exfiltrate data, escalate privileges, or mutate system state.
+const SHELL_SAFE_BINARIES: &[&str] = &[
+    // Read-only inspection
+    "cat", "head", "tail", "less", "wc", "file", "stat", "find", "tree", "ls",
+    "pwd", "echo", "printf", "test", "true", "false", "which", "type",
+    // Search
+    "grep", "rg", "ag", "ack", "fgrep", "egrep",
+    // Text processing
+    "sed", "awk", "cut", "sort", "uniq", "tr", "jq", "yq", "diff",
+    // Python and JS runtimes / package managers
+    "python", "python3", "pip", "pip3", "uv", "uvx", "pipx",
+    "node", "npm", "npx", "pnpm", "yarn", "deno", "bun",
+    "tsc", "eslint", "prettier",
+    // VCS
+    "git",
+    // Misc dev tools
+    "make", "cmake", "cargo", "rustc", "go",
+    "java", "javac", "mvn", "gradle",
+    "dotnet", "swift", "gcc", "clang", "g++",
+];
+
+/// Tokens that always require approval, regardless of `enhanced_shell_mode`.
+/// These programs can reach the network or escalate privileges.
+const SHELL_DENY_TOKENS: &[&str] = &[
+    // Network
+    "curl", "wget", "scp", "ssh", "nc", "telnet", "rsync", "ftp",
+    // Privilege escalation
+    "sudo", "doas", "runas", "su",
+];
+
+/// Substrings that always require approval, regardless of the binary match.
+/// Used to block destructive system operations even when invoked through a
+/// safe binary (e.g. `python -c "... rm -rf / ..."`). Deliberately excludes
+/// `/usr/`, `/var/`, and other broad prefixes so the Enhanced shell mode can
+/// still read Python libraries and other dev assets living under those
+/// trees — the user's primary motivation for this feature.
+const SHELL_DENY_SUBSTRINGS: &[&str] = &[
+    // Destructive system operations
+    "rm -rf /",
+    "rm -rf ~",
+    "rm -rf $home",
+    "rm -rf ${home",
+    "chmod 777",
+    "chmod -r 777",
+    "mkfs",
+    "dd if=",
+    // Shell substitution — already blocked by conservative scope, repeated
+    // here so Enhanced mode rejects it too even when the wrapping binary
+    // (e.g. `echo`) is on the safe list.
+    "$(",
+    // Protected system paths (writes to system config / boot / runtime state).
+    "/etc/",
+    "/boot/",
+    "/proc/",
+    "/sys/",
+    "/system/",
+    // Windows system paths (single-, double-, and quadruple-backslash forms so
+    // we catch raw shells, Python source literals, and Rust-test string
+    // escapes that round-trip through `\\`).
+    "c:/windows",
+    "c:\\windows",
+    "c:\\\\windows",
+    "c:/program files",
+    "c:\\program files",
+    "c:\\\\program files",
+];
+
 pub type AgentEventSink = Arc<dyn Fn(AgentEvent) + Send + Sync>;
 
 #[derive(Debug, Clone)]
@@ -63,6 +134,11 @@ pub struct AgentRuntime {
     web_search_config: Option<WebSearchConfig>,
     anytxt_config: Option<AnyTxtConfig>,
     external_mcp_config: Option<ExternalMcpRuntimeConfig>,
+    /// When true, `shell.exec` invocations matching `SHELL_SAFE_BINARIES` are
+    /// allowed without a per-call approval prompt. Sourced from the global
+    /// `agent.enhancedShellMode` setting in `app-state.json` at runtime
+    /// construction time. See `is_shell_command_allowed_without_prompt`.
+    enhanced_shell_mode: bool,
     pending_writes: PendingWikiWriteStore,
 }
 
@@ -177,8 +253,27 @@ impl AgentRuntime {
             web_search_config,
             anytxt_config,
             external_mcp_config,
+            // Default OFF: callers must opt in via `with_enhanced_shell_mode`
+            // so unit tests keep their existing conservative behavior without
+            // updating every test fixture.
+            enhanced_shell_mode: false,
             pending_writes,
         }
+    }
+
+    /// Builder hook for the global `agent.enhancedShellMode` setting. When
+    /// enabled, `shell.exec` commands matching `SHELL_SAFE_BINARIES` run
+    /// without per-call approval; `SHELL_DENY_TOKENS` and
+    /// `SHELL_DENY_SUBSTRINGS` continue to require approval.
+    pub fn with_enhanced_shell_mode(mut self, value: bool) -> Self {
+        self.enhanced_shell_mode = value;
+        self
+    }
+
+    /// Whether this runtime instance was constructed with
+    /// `with_enhanced_shell_mode(true)`. Read by the shell-approval gate.
+    pub fn enhanced_shell_mode(&self) -> bool {
+        self.enhanced_shell_mode
     }
 
     fn queue_wiki_write_if_confirmation_required(
@@ -1493,6 +1588,7 @@ impl AgentRuntime {
                 command,
                 &request.approved_shell_commands,
                 &self.project_path,
+                self.enhanced_shell_mode,
             ) {
                 let approved_action = AgentLoopAction {
                     action: "tool".to_string(),
@@ -1562,6 +1658,7 @@ impl AgentRuntime {
                             .iter()
                             .any(|reference| reference.kind == "workspace"),
                         &external_mcp_snapshot,
+                        self.enhanced_shell_mode,
                     ),
                 )
             };
@@ -2070,10 +2167,18 @@ impl AgentRuntime {
         let input_detail = summarize_tool_input(tool, &input);
 
         if tool == "shell.exec" {
-            if skills.is_empty() {
+            // Enhanced shell mode (Settings → General, default ON) is itself
+            // an explicit user opt-in for shell access. Require either it
+            // OR an active skill, not both. This is what lets the agent run
+            // `python -c "import inspect; ..."` on a fresh turn with no
+            // skill selected — the user's Enhanced-mode toggle is the
+            // authorization. The safe-binary allow-list and deny gate
+            // remain in place to keep destructive / network / system
+            // commands gated.
+            if skills.is_empty() && !self.enhanced_shell_mode {
                 return Ok(record_loop_tool_rejection(
                     tool,
-                    "shell.exec is only available when at least one skill is active for this turn"
+                    "shell.exec is only available when at least one skill is active or Enhanced shell mode is enabled in Settings → General"
                         .to_string(),
                     tool_events,
                     events,
@@ -2125,6 +2230,7 @@ impl AgentRuntime {
                 command,
                 &request.approved_shell_commands,
                 &self.project_path,
+                self.enhanced_shell_mode,
             ) {
                 let detail = format!("approval required: {command}");
                 emit_event(
@@ -3192,7 +3298,8 @@ Use the available retrieval and tool actions to gather evidence before answering
 	Use workspace.write_file for generated artifacts such as SVG, HTML, Markdown drafts, JSON, or scripts. For large HTML/PPT files, first call workspace.write_file with an empty or small opening chunk, then call workspace.append_file with subsequent chunks, and finish only after the file contains closing tags such as </html>. Do not inline large heredocs or generated file bodies inside shell.exec JSON.\n\
 	Do not claim that a generated file exists until a workspace.write_file or shell.exec observation confirms it. In the final answer, mention only observed generated file paths.\n\
 	Return {{\"action\":\"final\",\"answer\":\"...\"}} only after tool observations support the answer, or when the question can be answered directly from the provided project context (purpose, overview, schema, attached files, conversation history). Do not invent page paths, reference titles, or skill names you have not actually observed. Skip optional polishing once the core deliverable is written.\n\
-	Only use shell.exec when active skill instructions or the user's explicit request require command-line work after files have been written with workspace.write_file. Generated files must be written under the Agent workspace described above. Commands whose explicit file paths stay inside the Agent workspace can run without an approval prompt; commands that mention external paths, home directories, downloads, temp folders, or network URLs require approval.\n\
+	Use shell.exec freely for code research, library introspection, and any command-line work the user explicitly asks for. An active skill is no longer required — Enhanced shell mode (Settings → General, default ON) is itself the user opt-in. Commands whose explicit file paths stay inside the Agent workspace can run without an approval prompt; commands that mention external paths, home directories, downloads, temp folders, or network URLs require approval. When the user has left Enhanced shell mode enabled in Settings (the default), commands whose program is on the safe-binary list (cat, head, tail, less, wc, grep, rg, sed, awk, find, jq, python, python3, pip, uv, uvx, node, npm, git, cargo, go, and similar) also run without per-call prompts even when their arguments reference external files such as Python libraries under site-packages. Network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), and destructive system paths (/etc/, /usr/, /var/, C:\\Windows, rm -rf /, chmod 777) always require approval, regardless of the safe-binary list. Any command containing shell substitution (`... $(...) ...` or backticks) also requires approval.
+	When the user has left Enhanced shell mode enabled in Settings (the default), commands whose program is on the safe-binary list (cat, head, tail, less, wc, grep, rg, sed, awk, find, jq, python, python3, pip, uv, uvx, node, npm, git, cargo, go, and similar) also run without per-call prompts even when their arguments reference external files such as Python libraries under site-packages. Network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), and destructive system paths (/etc/, /usr/, /var/, C:\\Windows, rm -rf /, chmod 777) always require approval, regardless of the safe-binary list. Any command containing shell substitution (`... $(...) ...` or backticks) also requires approval.\n\
 Use wiki.write_page only when the user explicitly asks to create or update a wiki page. Existing pages are create-only unless allowOverwrite is explicitly justified by the user's request. The path MUST start with \"wiki/\" and end with \".md\"; other forms are rejected. The content field is the full Markdown body and must fit in a single compact JSON action — do not try to put a very long page body in one wiki.write_page content value. For long pages, write the page in multiple iterations: each iteration may either call wiki.write_page with a complete page section plus the previous content (still respecting the single-action JSON size limit), split the topic across several sibling pages under wiki/, or use shell.exec with a small heredoc to append the additional Markdown to an existing page. Avoid relying on any single response carrying the full long body.{smart_retrieval}"
     )
 }
@@ -3262,6 +3369,7 @@ fn build_agent_loop_user(
     max_iterations: usize,
     has_generated_workspace_file: bool,
     external_mcp_tools: &[McpToolDefinition],
+    enhanced_shell_mode: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str(base_user);
@@ -3291,12 +3399,20 @@ fn build_agent_loop_user(
             description
         ));
     }
-    if !skills.is_empty() {
-        out.push_str("- skill.read_file: read a Markdown/reference file from an active skill directory by relative path. Prefer this over shell.exec for skill references.\n");
-        out.push_str("- user.ask: pause and show the user a structured form with single-choice, multi-choice, text, textarea, or confirmation fields when an active skill needs user input.\n");
-        out.push_str("- workspace.write_file: write generated artifacts under agent-workspace by relative path. For large HTML/PPT, initialize the file and then append chunks.\n");
-        out.push_str("- workspace.append_file: append content to a generated artifact under agent-workspace. Prefer this for large HTML/PPT after workspace.write_file.\n");
-        out.push_str("- shell.exec: run a command from the Agent workspace when a selected/available skill requires command-line work. Workspace-local commands can run directly; external paths or network access require approval.\n");
+    // List shell.exec whenever the user has any way to invoke it: an active
+    // skill OR Enhanced shell mode (Settings → General, default ON). Without
+    // this, the planner never sees the tool on a fresh turn.
+    let shell_listed = !skills.is_empty() || enhanced_shell_mode;
+    if shell_listed || !skills.is_empty() {
+        if !skills.is_empty() {
+            out.push_str("- skill.read_file: read a Markdown/reference file from an active skill directory by relative path. Prefer this over shell.exec for skill references.\n");
+            out.push_str("- user.ask: pause and show the user a structured form with single-choice, multi-choice, text, textarea, or confirmation fields when an active skill needs user input.\n");
+            out.push_str("- workspace.write_file: write generated artifacts under agent-workspace by relative path. For large HTML/PPT, initialize the file and then append chunks.\n");
+            out.push_str("- workspace.append_file: append content to a generated artifact under agent-workspace. Prefer this for large HTML/PPT after workspace.write_file.\n");
+        }
+        if shell_listed {
+            out.push_str("- shell.exec: run a shell command for code research, library introspection, or any command-line work the user asks for. Workspace-local commands run directly. With Enhanced shell mode enabled (the default in Settings), common dev tools (cat, head, grep, rg, sed, awk, find, jq, python, pip, uv, git, node, npm, cargo, go, etc.) also run without per-call prompts even when arguments reference external files; only network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), destructive system paths, and shell substitution always require approval. Prefer shell.exec over web.search when the user asks about a locally installed Python library (e.g. \"查一下本地的transformers库是否集成了X\") — use `python -c \"import inspect; ...\"` or `rg <symbol>` to read the on-disk source directly. Note: shell.exec no longer requires an active skill when Enhanced shell mode is on.\n");
+        }
     }
     if observations.is_empty() {
         out.push_str("\nTool observations so far: none.\n");
@@ -3896,9 +4012,75 @@ fn is_shell_command_allowed_without_prompt(
     command: &str,
     approved: &[String],
     project_path: &str,
+    enhanced_mode: bool,
 ) -> bool {
+    // Hard deny gate when Enhanced shell mode is on: any command that hits
+    // `SHELL_DENY_TOKENS` or `SHELL_DENY_SUBSTRINGS` must always require an
+    // approval, regardless of safe-binary membership or workspace scope. We
+    // intentionally do NOT apply this gate when enhanced_mode is false, so
+    // the conservative path-scope check continues to behave exactly as
+    // before for users who opt out.
+    if enhanced_mode && shell_command_hits_deny_patterns(command) {
+        return false;
+    }
     is_shell_command_approved(command, approved)
         || is_shell_command_scoped_to_agent_workspace(command, project_path)
+        || (enhanced_mode && shell_command_uses_safe_binary(command))
+}
+
+/// True when the command's program token (basename of the first
+/// whitespace-separated token) appears in `SHELL_SAFE_BINARIES`. Used by
+/// the enhanced-mode branch of `is_shell_command_allowed_without_prompt`.
+/// The deny-pattern gate is consulted separately via
+/// `shell_command_hits_deny_patterns`.
+fn shell_command_uses_safe_binary(command: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let program_token = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|ch| matches!(ch, '"' | '\''));
+    if program_token.is_empty() {
+        return false;
+    }
+    let program_basename = std::path::Path::new(program_token)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program_token);
+    SHELL_SAFE_BINARIES.contains(&program_basename)
+}
+
+/// True when `command` matches any of the hard-deny token or substring
+/// patterns. Used as a top-level gate when Enhanced shell mode is on so
+/// dangerous patterns (network clients, privilege escalation, destructive
+/// system paths, shell substitution) never auto-approve.
+fn shell_command_hits_deny_patterns(command: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    for deny in SHELL_DENY_TOKENS {
+        if shell_command_contains_token(&lower, deny) {
+            return true;
+        }
+    }
+    for deny in SHELL_DENY_SUBSTRINGS {
+        if lower.contains(deny) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `token` appears as a separate whitespace-delimited word in
+/// `command_lower` (already lowercased by the caller). Avoids matching `curl`
+/// inside `curlie` or `scp` inside `scpwrap`.
+fn shell_command_contains_token(command_lower: &str, token: &str) -> bool {
+    command_lower.split_whitespace().any(|word| word == token)
 }
 
 fn is_shell_command_scoped_to_agent_workspace(command: &str, project_path: &str) -> bool {
@@ -5323,6 +5505,7 @@ mod tests {
             16,
             true,
             &[],
+            false,
         );
 
         assert!(prompt.contains("step 15 of 16"));
@@ -5361,6 +5544,7 @@ mod tests {
             8,
             false,
             &[],
+            false,
         );
         // The trailing instruction used to push the model toward `final`
         // whenever the request looked satisfied. The new instruction asks
@@ -5403,6 +5587,7 @@ mod tests {
             8,
             false,
             &[],
+            false,
         );
         assert!(
             prompt.contains("wiki.write_page:"),
@@ -6322,21 +6507,25 @@ mod tests {
             "cat ppt/index.html | head -100",
             &[],
             project,
+            false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
             "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html | head -30",
             &[],
             project,
+            false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
             "mkdir -p deck && node scripts/validate.js deck/index.html",
             &[],
             project,
+            false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
             "echo safe",
             &["echo safe".to_string()],
             project,
+            false,
         ));
     }
 
@@ -6348,27 +6537,219 @@ mod tests {
             "cat /Users/test/.agents/skills/skill/SKILL.md",
             &[],
             project,
+            false,
         ));
         assert!(!is_shell_command_allowed_without_prompt(
             "cp ~/Desktop/file.png images/file.png",
             &[],
             project,
+            false,
         ));
         assert!(!is_shell_command_allowed_without_prompt(
             "cat ../raw/secrets.txt",
             &[],
             project,
+            false,
         ));
         assert!(!is_shell_command_allowed_without_prompt(
             "curl https://example.com/file",
             &[],
             project,
+            false,
         ));
         assert!(!is_shell_command_allowed_without_prompt(
             "OUT=/tmp/file.html echo x",
             &[],
             project,
+            false,
         ));
+    }
+
+    #[test]
+    fn enhanced_mode_lets_dev_tools_read_external_paths() {
+        let project = "/Users/test/Project";
+
+        // Reading a Python library outside the project: site-packages lives
+        // under /usr/lib or /usr/local/lib on most distros. The conservative
+        // path-scope rejects any absolute path that isn't the workspace, but
+        // Enhanced mode lets `cat` and `python` reach those files.
+        let cat_lib = "cat /usr/lib/python3/dist-packages/transformers/__init__.py";
+        assert!(
+            !is_shell_command_allowed_without_prompt(cat_lib, &[], project, false),
+            "conservative scope must reject absolute paths outside the workspace"
+        );
+        assert!(
+            is_shell_command_allowed_without_prompt(cat_lib, &[], project, true),
+            "enhanced mode should let `cat` read /usr/lib/... without prompt"
+        );
+
+        // The motivating example: introspect `transformers.AutoModel.forward`.
+        // The conservative scope happens to allow this one because the script
+        // body itself doesn't contain any external-path token, but enhanced
+        // mode covers it via the safe-binary branch too.
+        let inspect_call = "python -c \"import inspect; print(inspect.getsource(transformers.AutoModel.forward))\"";
+        assert!(is_shell_command_allowed_without_prompt(
+            inspect_call,
+            &[],
+            project,
+            true,
+        ));
+
+        // Absolute path to the interpreter should still match by basename.
+        assert!(is_shell_command_allowed_without_prompt(
+            "/usr/bin/python3 -c \"import sys; print(sys.version)\"",
+            &[],
+            project,
+            true,
+        ));
+
+        // Pip / uv / node / git reading files in /usr/local still pass.
+        for command in [
+            "uv pip list",
+            "pip show transformers",
+            "node --version",
+            "git log --oneline -10",
+            "git diff HEAD~1 --stat",
+        ] {
+            assert!(
+                is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to be allowed in enhanced mode"
+            );
+        }
+    }
+
+    #[test]
+    fn enhanced_mode_reading_protected_system_paths_still_requires_approval() {
+        let project = "/Users/test/Project";
+
+        // These commands have no external-path tokens, so the conservative
+        // path-scope check ALLOWS them. Enhanced mode must DENY them via the
+        // protected-path deny substrings (/etc/, /boot/, /proc/, /sys/,
+        // C:\Windows) — closing the gap where the agent could otherwise
+        // silently read sensitive system files through `python -c "open(...)"`.
+        for command in [
+            // /etc/ — system config, must require approval even via python.
+            "python -c \"open('/etc/passwd').read()\"",
+            // /boot/, /proc/, /sys/ — boot & runtime state.
+            "python -c \"open('/boot/grub/grub.cfg').read()\"",
+            "python -c \"print(open('/proc/self/environ').read())\"",
+            "python -c \"print(open('/sys/kernel/debug/foo').read())\"",
+            // Windows system paths.
+            "python -c \"open('C:\\\\Windows\\\\System32\\\\config').read()\"",
+        ] {
+            assert!(
+                is_shell_command_allowed_without_prompt(command, &[], project, false),
+                "conservative scope happens to allow `{command}`; this is the gap enhanced mode closes"
+            );
+            assert!(
+                !is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to require approval even with enhanced mode on"
+            );
+        }
+    }
+
+    #[test]
+    fn enhanced_mode_destructive_commands_still_require_approval() {
+        let project = "/Users/test/Project";
+
+        for command in [
+            "rm -rf /",
+            "rm -rf ~",
+            "chmod 777 /etc/passwd",
+            "chmod -r 777 /tmp",
+            "mkfs.ext4 /dev/sda",
+            "python -c \"import os; os.system('rm -rf /')\"",
+        ] {
+            assert!(
+                !is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to require approval even with enhanced mode on"
+            );
+        }
+    }
+
+    #[test]
+    fn enhanced_mode_network_clients_and_escalation_still_require_approval() {
+        let project = "/Users/test/Project";
+
+        for command in [
+            // Direct network clients — denied via deny tokens AND by
+            // conservative path-scope (https:// substring).
+            "curl https://example.com/file",
+            "wget https://example.com/file",
+            "scp user@host:file ./file",
+            "ssh user@host 'ls'",
+            "rsync -av user@host:/x ./x",
+            // Privilege escalation — denied via deny tokens. Conservative
+            // scope ALLOWS these (no external-path tokens), so this is a
+            // gap enhanced mode closes.
+            "sudo apt install curl",
+            "doas rm -rf /tmp/foo",
+            "runas /user:admin cmd",
+        ] {
+            assert!(
+                !is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to require approval even with enhanced mode on"
+            );
+        }
+    }
+
+    #[test]
+    fn enhanced_mode_command_substitution_still_requires_approval() {
+        let project = "/Users/test/Project";
+
+        for command in [
+            "echo $(curl https://x)",
+            "python -c \"x=$(curl https://x); print(x)\"",
+            "python -c \"import os; os.system(`rm -rf /`)\"",
+        ] {
+            assert!(
+                !is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to require approval (substitution / curl)"
+            );
+        }
+    }
+
+    #[test]
+    fn enhanced_mode_disabled_preserves_existing_behavior() {
+        // Re-run the full battery of the conservative path-scope tests with
+        // enhanced_mode=false. Results must be byte-identical to today.
+        let project = "/Users/test/Project";
+
+        // Commands the conservative scope accepts.
+        for ok_cmd in [
+            "cat ppt/index.html | head -100",
+            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html | head -30",
+            "mkdir -p deck && node scripts/validate.js deck/index.html",
+            "python -c \"import inspect; print(1)\"",
+            "git log --oneline -10",
+            // The conservative scope happens to allow these — they have no
+            // external-path tokens. Enhanced mode closes that gap.
+            "python -c \"open('/etc/passwd').read()\"",
+            "sudo apt install curl",
+        ] {
+            assert!(
+                is_shell_command_allowed_without_prompt(ok_cmd, &[], project, false),
+                "conservative scope should still allow `{ok_cmd}`"
+            );
+        }
+        // Commands the conservative scope rejects (because they contain
+        // external-path tokens or network substrings).
+        for blocked_cmd in [
+            "cat /Users/test/.agents/skills/skill/SKILL.md",
+            "cp ~/Desktop/file.png images/file.png",
+            "cat ../raw/secrets.txt",
+            "curl https://example.com/file",
+            "OUT=/tmp/file.html echo x",
+            "cat /usr/lib/python/transformers/__init__.py",
+            "python /usr/lib/python/inspect_transformers.py",
+            // Conservative rejects because of `https://` substring, not /etc/.
+            "python -c \"import urllib.request; urllib.request.urlopen('https://x')\"",
+        ] {
+            assert!(
+                !is_shell_command_allowed_without_prompt(blocked_cmd, &[], project, false),
+                "conservative scope should still require approval for `{blocked_cmd}`"
+            );
+        }
     }
 
     #[test]

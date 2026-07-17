@@ -113,6 +113,28 @@ export function GeneralSection({ draft, setDraft }: Props) {
           </p>
         </div>
       </label>
+
+      <label className="flex items-start gap-2 rounded-md border border-sky-500/40 bg-sky-500/5 p-3">
+        <input
+          type="checkbox"
+          checked={draft.enhancedShellMode}
+          onChange={(e) => setDraft("enhancedShellMode", e.target.checked)}
+          className="mt-0.5 h-4 w-4"
+        />
+        <div className="space-y-1">
+          <span className="text-sm font-medium">
+            {t("settings.sections.general.enhancedShellMode", {
+              defaultValue: "Enhanced shell mode (code-agent style)",
+            })}
+          </span>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.sections.general.enhancedShellModeHint", {
+              defaultValue:
+                "Lets the Agent run common development tools (python, pip, uv, git, rg, grep, cat, node, npm, cargo, etc.) without per-call approval prompts, including commands that reference external files such as Python libraries under site-packages. Network clients (curl, wget, ssh), privilege escalation (sudo), destructive system paths (/etc/, C:\\Windows, rm -rf /), and shell substitution always require approval regardless. The 30-second timeout and 20K character output cap still apply.",
+            })}
+          </p>
+        </div>
+      </label>
     </div>
   )
 }

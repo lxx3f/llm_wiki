@@ -264,11 +264,17 @@ function SavedAgentActivity({
             ? "tool_call"
             : "tool_result",
       tool: step.tool,
+      toolRaw: step.toolRaw,
       query: step.query,
       message: step.message,
       count: step.count,
       status: step.status,
       timestamp: step.timestamp,
+      // Preserve input/output so the click-to-expand panel in AgentActivity
+      // can render the original tool parameters and result in the saved
+      // history view as well as the live stream.
+      input: step.input,
+      output: step.output,
     })), [steps])
   const shellCommand = useMemo(() => extractShellApprovalCommand(steps), [steps])
   if (events.length === 0 && !shellCommand) return null
@@ -1312,14 +1318,49 @@ export function StreamingMessage({ content, agentEvents = [] }: StreamingMessage
 
 function AgentActivity({ events, compact = false }: { events: ChatAgentEvent[]; compact?: boolean }) {
   const { t } = useTranslation()
-  const visible = events.filter((event, index, arr) => {
-    const prev = arr[index - 1]
-    return !prev
-      || prev.stage !== event.stage
-      || prev.query !== event.query
-      || prev.tool !== event.tool
-      || prev.message !== event.message
-  })
+  // Collapse consecutive tool_call + tool_result pairs for the same tool
+  // into a single merged row, then dedup as before. The merged row keeps
+  // the call-side stage ("tool_call") and message (the input path/query/
+  // command) so the row's icon and label keep matching what the user saw
+  // before merging — only `output` and the final `status` are pulled in
+  // from the result half so the click-to-expand panel has both pieces.
+  const visible = useMemo(() => {
+    const merged: ChatAgentEvent[] = []
+    for (const event of events) {
+      const isToolResult = event.stage === "tool_result"
+      const last = merged[merged.length - 1]
+      if (
+        isToolResult
+        && last
+        && last.stage === "tool_call"
+        && last.tool === event.tool
+        && (last.query ?? "") === (event.query ?? "")
+      ) {
+        merged[merged.length - 1] = {
+          ...last,
+          // Preserve the call-side toolRaw; if the result half happens to
+          // carry a different raw id (shouldn't, but defensive), prefer
+          // whichever one is non-empty.
+          toolRaw: last.toolRaw ?? event.toolRaw,
+          status: event.status ?? last.status,
+          output: event.output ?? last.output,
+          timestamp: event.timestamp ?? last.timestamp,
+          count: event.count ?? last.count,
+        }
+        continue
+      }
+      merged.push(event)
+    }
+    return merged.filter((event, index, arr) => {
+      const prev = arr[index - 1]
+      return !prev
+        || prev.stage !== event.stage
+        || prev.query !== event.query
+        || prev.tool !== event.tool
+        || prev.message !== event.message
+    })
+  }, [events])
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (visible.length === 0) return null
 
   return (
@@ -1327,37 +1368,102 @@ function AgentActivity({ events, compact = false }: { events: ChatAgentEvent[]; 
       {visible.map((event, index) => {
         const active = index === visible.length - 1
         const Icon = agentStageIcon(event.stage)
+        const key = `${event.stage}-${event.tool ?? ""}-${event.query ?? ""}-${index}`
+        const expandable = Boolean(event.input || event.output)
+        const isOpen = expanded[key] === true
         return (
-          <div
-            key={`${event.stage}-${event.query ?? ""}-${index}`}
-            className={`flex min-w-0 items-center gap-2 text-xs ${
-              active ? "text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            <span
-              className={`flex h-4 w-4 shrink-0 items-center justify-center ${
-                active
-                  ? "text-primary/70"
-                  : "text-muted-foreground/60"
-              }`}
+          <div key={key}>
+            <button
+              type="button"
+              onClick={() => {
+                if (!expandable) return
+                setExpanded((prev) => ({ ...prev, [key]: !prev[key] }))
+              }}
+              disabled={!expandable}
+              aria-expanded={expandable ? isOpen : undefined}
+              className={`flex w-full min-w-0 items-center gap-2 rounded px-1 py-0.5 text-left text-xs transition-colors ${
+                active ? "text-foreground" : "text-muted-foreground"
+              } ${expandable ? "hover:bg-muted/40 cursor-pointer" : "cursor-default"}`}
             >
-              <Icon className={`h-3.5 w-3.5 ${active ? "animate-pulse" : ""}`} />
-            </span>
-            <span className="truncate">
-              {event.message || t(`chat.agent.${event.stage}`)}
-              {event.query ? <span className="text-muted-foreground"> · {event.query}</span> : null}
-              {typeof event.count === "number" ? (
-                <span className="text-muted-foreground"> · {t("chat.agent.resultCount", { count: event.count })}</span>
-              ) : null}
-            </span>
-            {event.timestamp && (
-              <time className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
-                {new Date(event.timestamp).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </time>
+              <span
+                className={`flex h-4 w-4 shrink-0 items-center justify-center ${
+                  active
+                    ? "text-primary/70"
+                    : "text-muted-foreground/60"
+                }`}
+              >
+                <Icon className={`h-3.5 w-3.5 ${active ? "animate-pulse" : ""}`} />
+              </span>
+              <span className="min-w-0 flex-1 truncate">
+                {event.toolRaw ? (
+                  <code
+                    className="mr-1.5 rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] font-normal text-muted-foreground"
+                    title={t("chat.tool.name", { defaultValue: "Tool name" })}
+                  >
+                    {event.toolRaw}
+                  </code>
+                ) : null}
+                {event.message || t(`chat.agent.${event.stage}`)}
+                {event.query ? <span className="text-muted-foreground"> · {event.query}</span> : null}
+                {typeof event.count === "number" ? (
+                  <span className="text-muted-foreground"> · {t("chat.agent.resultCount", { count: event.count })}</span>
+                ) : null}
+              </span>
+              {event.timestamp && (
+                <time className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
+                  {new Date(event.timestamp).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </time>
+              )}
+              {expandable && (
+                <ChevronRight
+                  className={`h-3 w-3 shrink-0 text-muted-foreground/70 transition-transform ${
+                    isOpen ? "rotate-90" : ""
+                  }`}
+                  aria-hidden
+                />
+              )}
+            </button>
+            {isOpen && (
+              <div
+                className="ml-6 mt-1 flex flex-col gap-2 rounded border border-border/40 bg-muted/30 p-2 text-[11px]"
+                data-testid="tool-detail-panel"
+              >
+                {event.input && (
+                  <div>
+                    <div className="font-medium text-muted-foreground">
+                      {t("chat.tool.parameters", { defaultValue: "Parameters" })}
+                    </div>
+                    <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-background/60 p-1.5 font-mono">
+                      {event.input}
+                    </pre>
+                  </div>
+                )}
+                {event.output && (
+                  <div>
+                    <div className="font-medium text-muted-foreground">
+                      {t("chat.tool.output", { defaultValue: "Result" })}
+                    </div>
+                    {event.status === "error" ? (
+                      <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-rose-500/40 bg-rose-500/5 p-1.5 font-mono text-rose-700 dark:text-rose-300">
+                        {event.output}
+                      </pre>
+                    ) : (
+                      <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-background/60 p-1.5 font-mono">
+                        {event.output}
+                      </pre>
+                    )}
+                  </div>
+                )}
+                {!event.output && event.status === "running" && (
+                  <div className="text-muted-foreground">
+                    {t("chat.tool.running", { defaultValue: "Running…" })}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )

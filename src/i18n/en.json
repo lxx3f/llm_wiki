@@ -287,6 +287,14 @@
       "reading_context": "Reading context",
       "writing": "Writing answer",
       "resultCount": "results: {{count}}"
+    },
+    "tool": {
+      "parameters": "Parameters",
+      "output": "Result",
+      "expandDetails": "Show details",
+      "collapseDetails": "Hide details",
+      "running": "Running…",
+      "emptyResult": "(no output)"
     }
   },
   "search": {

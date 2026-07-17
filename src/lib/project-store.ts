@@ -101,6 +101,23 @@ export async function loadExternalMcpConfig(): Promise<ExternalMcpConfig> {
   return normalizeExternalMcpConfig(await store.get<unknown>(EXTERNAL_MCP_CONFIG_KEY))
 }
 
+const ENHANCED_SHELL_MODE_KEY = "agent.enhancedShellMode"
+
+export async function saveEnhancedShellMode(enabled: boolean): Promise<void> {
+  const store = await getStore()
+  await store.set(ENHANCED_SHELL_MODE_KEY, enabled)
+  await store.save()
+}
+
+export async function loadEnhancedShellMode(): Promise<boolean> {
+  const store = await getStore()
+  // Default ON so the Rust runtime opts into the safe-binary allow-list on
+  // first launch. Users who want strict per-call approvals must explicitly
+  // flip this off in Settings.
+  const raw = await store.get<unknown>(ENHANCED_SHELL_MODE_KEY)
+  return raw === false ? false : true
+}
+
 const EMBEDDING_KEY = "embeddingConfig"
 
 export async function saveEmbeddingConfig(config: EmbeddingConfig): Promise<void> {

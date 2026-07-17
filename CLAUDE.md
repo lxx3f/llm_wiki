@@ -110,6 +110,18 @@ GitHub CI 当前只验证前端、MCP 和 Rust 能构建，不运行上述测试
 
 不要在 React、API handler 或 MCP server 中重新实现 Agent 核心，否则三种入口会产生行为漂移。新增 Agent 工具应在 `src-tauri/src/agent/tools.rs` 注册，并遵守该文件集中定义的读写、命令和输出上限。
 
+### Enhanced Shell Mode
+
+`shell.exec` 默认要求在 `Settings → General` 开启 **Enhanced shell mode**（chat-agent runtime 默认 ON），开启后：
+
+- `shell.exec` 不再要求本次会话激活某个 skill——用户对 Enhanced 开关的 opt-in 本身就是调用 shell 的授权。
+- 常用开发工具（`cat / head / grep / rg / sed / awk / find / jq / python / pip / uv / git / node / npm / cargo / go` 等）即使参数指向 site-packages 等项目外路径，也走免审批直通。
+- 网络客户端（`curl / wget / ssh / scp`）、提权（`sudo / doas`）、破坏性系统路径、`$()` / 反引号 shell substitution 这四类**永远**必须审批，不论 Enhanced 是否开启。
+- Windows 上默认调用 Git Bash（探测 PATH 里的 `bash.exe`，找不到 fall back 到 `ComSpec`/cmd）以保证 `rg / $() / POSIX` 风格命令按预期执行。
+- 关闭 Enhanced 后，回退到老的「必须激活 skill 才能 shell」行为；保留 skill 路径作为另一套独立 opt-in。
+
+工具列表里只在 `shell_listed = !skills.is_empty() || enhanced_shell_mode` 时才渲染 `- shell.exec:`，与执行门控保持一致。
+
 Wiki 写入受控覆盖：会话级 `WikiWriteMode`（`confirm` / `direct`）随请求传入。默认 `confirm` 下，对已存在 wiki 页面，`pending_writes.rs` 的 `PendingWikiWriteStore` 签发一次性、绑定 `project_id`/`session_id`、带 TTL 的 token，UI 通过 `WikiWriteConfirmationRequired` 事件显示确认卡；用户确认后调用 `agent_confirm_wiki_write` 命令复用 `tools::write_wiki_page_with_activity` 完成实际写入并返回 `AgentConfirmedWikiWrite`（含 `reference.path`、`existedBefore`、`previousContent`）。会话级覆盖策略在 `persist.ts` 加载时归一化为 `confirm`/`direct`，API/MCP 入口默认仍是 `confirm`。`WikiPageContext` 工具类型需 `pub(crate)` 化以便确认 command 复用，但保留既有公共函数不删除。
 
 ### 本地 API 与 MCP

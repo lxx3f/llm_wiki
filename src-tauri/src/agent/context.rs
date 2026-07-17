@@ -87,6 +87,16 @@ fn build_system_context(
             "- anytxt.search is available for local or remote file content indexed by AnyTXT.\n",
         );
     }
+    if router.should_hint_shell {
+        // The user's wording ("本地的X库" / "locally installed X" / "site-packages")
+        // strongly implies they want the locally installed source inspected, not
+        // public docs. Nudge the model planner toward shell.exec + inspect /
+        // ripgrep rather than web.search, which would otherwise return generic
+        // HuggingFace/conda/pip documentation instead of what's on disk.
+        out.push_str(
+            "- shell.exec is available for inspecting locally installed Python libraries and packages. When the user asks about a 'local' / '本地' library, installed package, or site-packages code (e.g. \"本地的transformers库是否集成了X\"), prefer `shell.exec` with `python -c \"import inspect; ...\"` or `rg <symbol>` over `web.search`. The Enhanced shell mode (Settings → General) is on by default and lets python/rg/git/cat read site-packages directly without per-call prompts.\n",
+        );
+    }
     out.push_str(&format!(
         "- Router hint: {:?}. {}\n",
         router.intent, router.rationale

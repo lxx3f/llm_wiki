@@ -24,10 +24,31 @@ export interface ChatAgentEvent {
   stage: ChatAgentEventStage
   query?: string
   tool?: ChatAgentToolName
+  /**
+   * Original backend tool name (e.g. "wiki.read_page", "shell.exec",
+   * "source.search", "mcp.minimax.search") before normalization to the
+   * 8-category `ChatAgentToolName` UI enum. Surfaced as a small monospace
+   * badge in the activity row so users can see exactly which tool was
+   * invoked, not just the generic category.
+   */
+  toolRaw?: string
   message?: string
   count?: number
   status?: "running" | "success" | "error" | "skipped"
   timestamp?: number
+  /**
+   * Raw input payload as a string (path / query / command / etc.). Surfaced
+   * verbatim in the click-to-expand detail panel for tool rows; absent for
+   * lifecycle stages (routing / understanding) that carry no parameters.
+   */
+  input?: string
+  /**
+   * Raw output payload as a string. Empty until the matching ToolEnd event
+   * arrives. For `wiki.read_page` this is the (whitespace-collapsed, 4 000-
+   * char-truncated) page body; for `shell.exec` it is the exit-code / error
+   * summary; for search tools it is the count/stats line.
+   */
+  output?: string
 }
 
 export type ChatAgentMode = "fast" | "standard" | "deep" | "local_first"
@@ -73,11 +94,17 @@ export interface ChatAgentStep {
   id: string
   type: "understanding" | "routing" | "tool_call" | "tool_result" | "final"
   tool?: ChatAgentToolName
+  /** Mirror of ChatAgentEvent.toolRaw; see that field for details. */
+  toolRaw?: string
   query?: string
   message?: string
   count?: number
   status?: "running" | "success" | "error" | "skipped"
   timestamp?: number
+  /** Mirror of ChatAgentEvent.input; see that field for details. */
+  input?: string
+  /** Mirror of ChatAgentEvent.output; see that field for details. */
+  output?: string
 }
 
 export interface ChatAgentFileChange {

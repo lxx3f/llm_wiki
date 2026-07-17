@@ -287,6 +287,14 @@
       "reading_context": "读取上下文",
       "writing": "生成回答",
       "resultCount": "{{count}} 条结果"
+    },
+    "tool": {
+      "parameters": "参数",
+      "output": "结果",
+      "expandDetails": "显示详情",
+      "collapseDetails": "隐藏详情",
+      "running": "执行中…",
+      "emptyResult": "（无输出）"
     }
   },
   "search": {

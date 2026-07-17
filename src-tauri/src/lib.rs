@@ -35,6 +35,11 @@ struct AgentRuntimeConfig {
     web_search: Option<agent::tools::WebSearchConfig>,
     anytxt: Option<agent::tools::AnyTxtConfig>,
     external_mcp: Option<agent::mcp_client::ExternalMcpRuntimeConfig>,
+    /// Mirrors `agent.enhancedShellMode` from `app-state.json`. When true,
+    /// `shell.exec` invocations matching the safe-binary list run without a
+    /// per-call approval prompt. Defaults to true so that code-research
+    /// workflows (e.g. `python -c "import inspect..."`) do not need to opt in.
+    enhanced_shell_mode: bool,
 }
 
 #[tauri::command]
@@ -112,7 +117,8 @@ async fn agent_start_turn(
         runtime_config.anytxt,
         runtime_config.external_mcp,
         app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
-    );
+    )
+    .with_enhanced_shell_mode(runtime_config.enhanced_shell_mode);
     let user_message = request.message.clone();
     let persist_session = request.persist_session;
     let cancellation = app
@@ -233,7 +239,8 @@ async fn agent_start_turn_stream(
         runtime_config.anytxt,
         runtime_config.external_mcp,
         app.state::<agent::pending_writes::PendingWikiWriteStore>().inner().clone(),
-    );
+    )
+    .with_enhanced_shell_mode(runtime_config.enhanced_shell_mode);
     let app_for_task = app.clone();
     let project_for_task = project.clone();
     let session_for_task = active_session_id.clone();
@@ -446,7 +453,10 @@ fn load_agent_app_state(app: &tauri::AppHandle) -> Option<Value> {
 
 fn load_agent_runtime_config(app: &tauri::AppHandle) -> AgentRuntimeConfig {
     let Some(parsed) = load_agent_app_state(app) else {
-        return AgentRuntimeConfig::default();
+        return AgentRuntimeConfig {
+            enhanced_shell_mode: true,
+            ..Default::default()
+        };
     };
     AgentRuntimeConfig {
         embedding: parsed
@@ -470,6 +480,14 @@ fn load_agent_runtime_config(app: &tauri::AppHandle) -> AgentRuntimeConfig {
             .get("externalMcpConfig")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok()),
+        // Default ON when the field is absent so existing app-state.json files
+        // continue to opt into Enhanced shell mode without a migration step.
+        enhanced_shell_mode: parsed
+            .get("agent")
+            .and_then(Value::as_object)
+            .and_then(|agent| agent.get("enhancedShellMode"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
     }
 }
 

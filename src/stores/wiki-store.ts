@@ -614,10 +614,15 @@ export const useWikiStore = create<WikiState>((set) => ({
     set((state) => {
       if (state.historyCursor <= 0) return {}
       const newCursor = state.historyCursor - 1
+      // Force `previewContentPath` to null so the preview panel's load
+      // effect actually re-reads the target file. Keeping it equal to
+      // `selectedFile` would short-circuit the effect (it assumes the
+      // content is already loaded), leaving `fileContent` pinned to the
+      // previous page and rendering the old wiki under the new filename.
       return {
         historyCursor: newCursor,
         selectedFile: state.pageHistory[newCursor],
-        previewContentPath: state.pageHistory[newCursor],
+        previewContentPath: null,
         externalPreview: null,
       }
     }),
@@ -629,7 +634,7 @@ export const useWikiStore = create<WikiState>((set) => ({
       return {
         historyCursor: newCursor,
         selectedFile: state.pageHistory[newCursor],
-        previewContentPath: state.pageHistory[newCursor],
+        previewContentPath: null,
         externalPreview: null,
       }
     }),

@@ -153,6 +153,27 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
             // style instead of looking like working links that click
             // to nothing.
             const isMissing = slug !== null && missingSlugs.has(slug)
+            // Catch the third link flavour: a plain markdown link
+            // whose target is a wiki page slug the author wrote
+            // manually (`[momentum-动量法](momentum-动量法)`) instead
+            // of using `[[wikilink]]` syntax. Without this branch the
+            // href has no scheme and no `#` fragment, so neither
+            // isExternalUrl nor isWikilink fires, and the WebView
+            // tries to navigate to the relative URL — silently
+            // replacing the in-app preview with nothing.
+            const resolvedInternalPath = !isExternalUrl && h && !isWikilink && wikiRoot
+              // Decode first because react-markdown / the markdown
+              // pipeline URL-encodes non-ASCII characters in plain
+              // markdown link targets (e.g. `momentum-动量法` →
+              // `momentum-%E5%8A%A8%E9%87%8F%E6%B3%95`). The path
+              // index keys file basenames by their raw UTF-8 name,
+              // so an encoded slug returns null and the link would
+              // fall through to native WebView handling, silently
+              // replacing the preview with nothing. `decodeURI`
+              // preserves URL structure (`/`, `?`, `#`) so file
+              // path slugs stay intact.
+              ? resolveRelatedSlug(projectPathIndex, safeDecodeHref(h), wikiRoot)
+              : null
             const className = isMissing
               ? "cursor-pointer text-muted-foreground line-through decoration-rose-500/60 underline-offset-2 hover:decoration-rose-500"
               : isWikilink
@@ -185,6 +206,16 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
                     void openUrl(h).catch((err) => {
                       console.error("[wiki-reader] openUrl failed:", err)
                     })
+                    return
+                  }
+                  if (resolvedInternalPath) {
+                    // Plain markdown link that resolves to a wiki
+                    // page (e.g. `[slug](slug)`) — route through the
+                    // preview just like `[[wikilink]]` would, so the
+                    // WebView doesn't try to navigate to a relative
+                    // URL and wipe the current preview.
+                    e.preventDefault()
+                    openPathInPreview(resolvedInternalPath)
                   }
                 }}
                 // Always surface the actual link target on hover so the

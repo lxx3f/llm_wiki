@@ -4,8 +4,9 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import "katex/dist/katex.min.css"
-import { AlertTriangle } from "lucide-react"
+import { AlertTriangle, ExternalLink } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   collectWikilinkRefs,
   transformImageEmbeds,
@@ -138,23 +139,102 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
           a: ({ href, children, ...props }) => {
             const h = typeof href === "string" ? href : ""
             const isWikilink = h.startsWith("#")
+            // RFC 3986-style scheme detection. Matches `http:`, `https:`,
+            // `mailto:`, `ftp:`, `tel:`, `file:`, `data:`, etc. — anything
+            // that should leave the app via the system browser / handler
+            // instead of being loaded inside the WebView. Relative paths
+            // (`./foo`, `../bar`, `/abs`) and pure anchors (`#frag`) are
+            // explicitly NOT matched, so they keep their existing
+            // behaviour.
+            const isExternalUrl = /^[a-z][a-z0-9+.-]*:/i.test(h)
             const slug = isWikilink ? safeDecodeFragment(h.slice(1)) : null
             // Resolve the slug against the path index so unresolved
             // (broken) `[[wikilinks]]` render with the missing-link
             // style instead of looking like working links that click
             // to nothing.
             const isMissing = slug !== null && missingSlugs.has(slug)
+            // Catch the third link flavour: a plain markdown link
+            // whose target is a wiki page slug the author wrote
+            // manually (`[momentum-动量法](momentum-动量法)`) instead
+            // of using `[[wikilink]]` syntax. Without this branch the
+            // href has no scheme and no `#` fragment, so neither
+            // isExternalUrl nor isWikilink fires, and the WebView
+            // tries to navigate to the relative URL — silently
+            // replacing the in-app preview with nothing.
+            const resolvedInternalPath = !isExternalUrl && h && !isWikilink && wikiRoot
+              // Decode first because react-markdown / the markdown
+              // pipeline URL-encodes non-ASCII characters in plain
+              // markdown link targets (e.g. `momentum-动量法` →
+              // `momentum-%E5%8A%A8%E9%87%8F%E6%B3%95`). The path
+              // index keys file basenames by their raw UTF-8 name,
+              // so an encoded slug returns null and the link would
+              // fall through to native WebView handling, silently
+              // replacing the preview with nothing. `decodeURI`
+              // preserves URL structure (`/`, `?`, `#`) so file
+              // path slugs stay intact.
+              ? resolveRelatedSlug(projectPathIndex, safeDecodeHref(h), wikiRoot)
+              : null
             const className = isMissing
               ? "cursor-pointer text-muted-foreground line-through decoration-rose-500/60 underline-offset-2 hover:decoration-rose-500"
               : isWikilink
                 ? "cursor-pointer text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
-                : "text-primary underline underline-offset-2"
+                : isExternalUrl
+                  // inline-flex + items-baseline keeps the ExternalLink
+                  // icon aligned with the link text even when the text
+                  // wraps across lines (the gap keeps icon + text on
+                  // the same baseline without the underline cutting
+                  // through the icon).
+                  ? "inline-flex items-baseline gap-1 text-primary underline underline-offset-2 hover:text-primary/80"
+                  : "text-primary underline underline-offset-2"
             return (
               <a
                 href={h || undefined}
-                onClick={(e) => isWikilink && handleAnchorClick(e, h)}
-                title={isMissing ? t("nav.missingHint", { slug }) : undefined}
+                target={isExternalUrl ? "_blank" : undefined}
+                rel={isExternalUrl ? "noopener noreferrer" : undefined}
+                // Same routing pattern as settings/about-section.tsx:
+                // Tauri 2's WebView doesn't auto-delegate external
+                // clicks to the system browser — the opener plugin
+                // does. `target="_blank"` + `rel="noopener noreferrer"`
+                // stay as a defensive fallback in case `openUrl` rejects.
+                onClick={(e) => {
+                  if (isWikilink) {
+                    handleAnchorClick(e, h)
+                    return
+                  }
+                  if (isExternalUrl) {
+                    e.preventDefault()
+                    void openUrl(h).catch((err) => {
+                      console.error("[wiki-reader] openUrl failed:", err)
+                    })
+                    return
+                  }
+                  if (resolvedInternalPath) {
+                    // Plain markdown link that resolves to a wiki
+                    // page (e.g. `[slug](slug)`) — route through the
+                    // preview just like `[[wikilink]]` would, so the
+                    // WebView doesn't try to navigate to a relative
+                    // URL and wipe the current preview.
+                    e.preventDefault()
+                    openPathInPreview(resolvedInternalPath)
+                  }
+                }}
+                // Always surface the actual link target on hover so the
+                // user can see where a click will land without having
+                // to inspect the DOM. For wikilinks we show the decoded
+                // slug (e.g. `[[foo bar]]` → "foo bar") instead of the
+                // raw `#foo%20bar` fragment. For everything else (URLs,
+                // relative paths, etc.) the href is shown verbatim.
+                // Missing wikilinks keep the more informative
+                // "Page does not exist: X" tooltip on top.
+                title={
+                  isMissing
+                    ? t("nav.missingHint", { slug })
+                    : h
+                      ? (isWikilink ? (slug ?? h.slice(1)) : safeDecodeHref(h))
+                      : undefined
+                }
                 data-missing={isMissing ? "true" : undefined}
+                data-external={isExternalUrl ? "true" : undefined}
                 className={className}
                 {...props}
               >
@@ -165,6 +245,12 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
                   />
                 ) : null}
                 {children}
+                {isExternalUrl ? (
+                  <ExternalLink
+                    className="ml-0.5 inline h-3 w-3 shrink-0 align-baseline text-primary/70"
+                    aria-hidden
+                  />
+                ) : null}
               </a>
             )
           },
@@ -266,5 +352,21 @@ function safeDecodeFragment(fragment: string): string {
     return decodeURIComponent(fragment)
   } catch {
     return fragment
+  }
+}
+
+/**
+ * Best-effort decode of a full href (used for the hover tooltip on
+ * external / relative links). Uses `decodeURI` rather than
+ * `decodeURIComponent` so URL structure (`?`, `&`, `=`, `/`, `#`) is
+ * preserved while still turning `%E4%B8%AD` back into `中` for
+ * display. Click handling still uses the original `h` so the actual
+ * navigation is unaffected.
+ */
+function safeDecodeHref(href: string): string {
+  try {
+    return decodeURI(href)
+  } catch {
+    return href
   }
 }

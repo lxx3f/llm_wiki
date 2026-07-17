@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef, useState } from "react"
-import { X } from "lucide-react"
+import { ChevronLeft, ChevronRight, X } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile } from "@/commands/fs"
 import { getFileCategory, isBinary, isExtractedTextPreviewFile } from "@/lib/file-types"
@@ -13,6 +14,7 @@ import { isImeComposing } from "@/lib/keyboard-utils"
 const WIKI_SEARCH_DEBOUNCE_MS = 300
 
 export function PreviewPanel() {
+  const { t } = useTranslation()
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const fileContent = useWikiStore((s) => s.fileContent)
   const previewContentPath = useWikiStore((s) => s.previewContentPath)
@@ -22,6 +24,10 @@ export function PreviewPanel() {
   const project = useWikiStore((s) => s.project)
   const openFileInPreview = useWikiStore((s) => s.openFileInPreview)
   const setActiveView = useWikiStore((s) => s.setActiveView)
+  const pageHistory = useWikiStore((s) => s.pageHistory)
+  const historyCursor = useWikiStore((s) => s.historyCursor)
+  const goBack = useWikiStore((s) => s.goBack)
+  const goForward = useWikiStore((s) => s.goForward)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Snapshot of what was most recently loaded from disk. Milkdown re-emits
   // `markdownUpdated` on initial parse (before the user types anything),
@@ -183,6 +189,44 @@ export function PreviewPanel() {
     [openFileInPreview],
   )
 
+  // Back / Forward shortcuts (Alt+ArrowLeft / Alt+ArrowRight) only
+  // while the wiki preview itself is mounted — we attach the listener
+  // here rather than at the App level so the keystrokes don't leak
+  // into other views (chat, sources, settings). The target guard
+  // bails when focus is inside an editable surface so the keys still
+  // work in the inline wiki search box and any future in-page
+  // contenteditable element.
+  //
+  // This effect MUST live above the `!selectedFile` early return —
+  // hooks called conditionally trigger React's "Rendered more hooks
+  // than during the previous render" error the moment the user opens
+  // the first page. The body re-checks `selectedFile` so the listener
+  // is only attached when the preview is actually open.
+  useEffect(() => {
+    if (!selectedFile) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.altKey) return
+      const target = event.target as HTMLElement | null
+      if (
+        target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || (target?.isContentEditable ?? false)
+      ) {
+        return
+      }
+      if (event.key === "ArrowLeft" && historyCursor > 0) {
+        event.preventDefault()
+        goBack()
+      } else if (event.key === "ArrowRight" && historyCursor >= 0
+        && historyCursor < pageHistory.length - 1) {
+        event.preventDefault()
+        goForward()
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [selectedFile, historyCursor, pageHistory.length, goBack, goForward])
+
   if (!selectedFile) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -211,6 +255,28 @@ export function PreviewPanel() {
         <span className="truncate text-xs text-muted-foreground" title={selectedFile}>
           {fileName}
         </span>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={goBack}
+            disabled={historyCursor <= 0}
+            aria-label={t("nav.back")}
+            title={`${t("nav.back")} (Alt+←)`}
+            className="shrink-0 rounded p-1 text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground disabled:opacity-30"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={goForward}
+            disabled={historyCursor < 0 || historyCursor >= pageHistory.length - 1}
+            aria-label={t("nav.forward")}
+            title={`${t("nav.forward")} (Alt+→)`}
+            className="shrink-0 rounded p-1 text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground disabled:opacity-30"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <div className="relative shrink-0">
           <input
             type="text"

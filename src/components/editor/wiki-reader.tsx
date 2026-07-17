@@ -4,7 +4,13 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import "katex/dist/katex.min.css"
-import { transformImageEmbeds, transformWikilinks } from "@/lib/wikilink-transform"
+import { AlertTriangle } from "lucide-react"
+import { useTranslation } from "react-i18next"
+import {
+  collectWikilinkRefs,
+  transformImageEmbeds,
+  transformWikilinks,
+} from "@/lib/wikilink-transform"
 import { resolveRelatedSlug } from "@/lib/wiki-page-resolver"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { normalizePath } from "@/lib/path-utils"
@@ -42,6 +48,7 @@ interface WikiReaderProps {
  * giving the user single-click navigation between pages.
  */
 export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: WikiReaderProps) {
+  const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const projectPathIndex = useWikiStore((s) => s.projectPathIndex)
   const openPathInPreview = useWikiStore((s) => s.openPathInPreview)
@@ -53,6 +60,29 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
     () => transformWikilinks(transformImageEmbeds(body)),
     [body],
   )
+  const renderLanguage = detectLanguage(body)
+  const direction = getTextDirection(renderLanguage)
+  const htmlLang = getHtmlLang(renderLanguage)
+  const projectPath = project ? normalizePath(project.path) : null
+  const wikiRoot = projectPath ? `${projectPath}/wiki` : null
+
+  // Set of wikilink slugs (raw targets, NOT encodeURIComponent-ed)
+  // that the project path index can't resolve. Rendered links use
+  // this to switch into "missing" style (line-through + AlertTriangle)
+  // before the user clicks and gets a silent no-op. Recomputes when
+  // the body or the project's path index changes.
+  const missingSlugs = useMemo(() => {
+    if (!wikiRoot) return new Set<string>()
+    const refs = collectWikilinkRefs(body)
+    if (refs.length === 0) return new Set<string>()
+    const missing = new Set<string>()
+    for (const { slug } of refs) {
+      if (!resolveRelatedSlug(projectPathIndex, slug, wikiRoot)) {
+        missing.add(slug)
+      }
+    }
+    return missing
+  }, [body, projectPathIndex, wikiRoot])
   const sourceLineStarts = useMemo(() => {
     if (sourceBody === undefined) return null
     const starts = [0]
@@ -73,11 +103,6 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
     if (start === undefined || end === undefined) return {}
     return { "data-source-start": sourceOffset + start, "data-source-end": sourceOffset + end }
   }
-  const renderLanguage = detectLanguage(body)
-  const direction = getTextDirection(renderLanguage)
-  const htmlLang = getHtmlLang(renderLanguage)
-  const projectPath = project ? normalizePath(project.path) : null
-  const wikiRoot = projectPath ? `${projectPath}/wiki` : null
   // Directory of the file being rendered (project-absolute), so
   // relative image srcs resolve against it like Obsidian does.
   const currentFileDir = useMemo(() => {
@@ -91,13 +116,7 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
     if (!href.startsWith("#")) return
     e.preventDefault()
     if (!wikiRoot) return
-    const slug = (() => {
-      try {
-        return decodeURIComponent(href.slice(1))
-      } catch {
-        return href.slice(1)
-      }
-    })()
+    const slug = safeDecodeFragment(href.slice(1))
     const path = resolveRelatedSlug(projectPathIndex, slug, wikiRoot)
     if (path) openPathInPreview(path)
   }
@@ -119,17 +138,32 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
           a: ({ href, children, ...props }) => {
             const h = typeof href === "string" ? href : ""
             const isWikilink = h.startsWith("#")
+            const slug = isWikilink ? safeDecodeFragment(h.slice(1)) : null
+            // Resolve the slug against the path index so unresolved
+            // (broken) `[[wikilinks]]` render with the missing-link
+            // style instead of looking like working links that click
+            // to nothing.
+            const isMissing = slug !== null && missingSlugs.has(slug)
+            const className = isMissing
+              ? "cursor-pointer text-muted-foreground line-through decoration-rose-500/60 underline-offset-2 hover:decoration-rose-500"
+              : isWikilink
+                ? "cursor-pointer text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
+                : "text-primary underline underline-offset-2"
             return (
               <a
                 href={h || undefined}
                 onClick={(e) => isWikilink && handleAnchorClick(e, h)}
-                className={
-                  isWikilink
-                    ? "cursor-pointer text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
-                    : "text-primary underline underline-offset-2"
-                }
+                title={isMissing ? t("nav.missingHint", { slug }) : undefined}
+                data-missing={isMissing ? "true" : undefined}
+                className={className}
                 {...props}
               >
+                {isMissing ? (
+                  <AlertTriangle
+                    className="mr-1 inline h-3 w-3 align-text-bottom text-rose-500/80"
+                    aria-hidden
+                  />
+                ) : null}
                 {children}
               </a>
             )
@@ -218,4 +252,19 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
       </ReactMarkdown>
     </div>
   )
+}
+
+/**
+ * Decode a `#fragment` href back to its raw slug while tolerating
+ * malformed escapes (a stray `%` in a hand-written wikilink target
+ * would otherwise throw). Falls back to the un-decoded slice when
+ * decoding fails so the link still routes — just possibly to a
+ * non-existent page, which the missing-style rendering will surface.
+ */
+function safeDecodeFragment(fragment: string): string {
+  try {
+    return decodeURIComponent(fragment)
+  } catch {
+    return fragment
+  }
 }

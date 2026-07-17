@@ -1,6 +1,14 @@
 import { create } from "zustand"
 import type { WikiProject, FileNode } from "@/types/wiki"
 import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config"
+
+/**
+ * Cap on the wiki preview back/forward history. Long enough for any
+ * realistic session (a long editing session rarely opens more than a
+ * few dozen pages) but bounded so storage stays predictable across
+ * long-lived sessions.
+ */
+const MAX_PAGE_HISTORY = 50
 import { DEFAULT_EXTERNAL_MCP_CONFIG, type ExternalMcpConfig } from "@/lib/external-mcp-config"
 import {
   buildProjectPathIndexFromTree,
@@ -387,6 +395,22 @@ interface WikiState {
    * one wiki-relative) still works.
    */
   pendingScrollImageSrc: string | null
+  /**
+   * Same-view navigation history for the wiki preview. Each entry is
+   * a previously-opened wiki page path; `historyCursor` points to the
+   * currently-displayed entry. Together they drive the Back / Forward
+   * chevron buttons in the preview header and the Alt+Arrow shortcuts.
+   * Distinct from `previewReturnView`, which only remembers the most
+   * recent non-wiki view (sources → wiki preview → close → sources).
+   *
+   * Transient — never persisted to `app-state.json`. Cleared whenever
+   * `selectedFile` becomes null so closing the preview doesn't leave
+   * a stale trail Alt+Left could resurrect.
+   *
+   * `historyCursor === -1` means the stack is empty.
+   */
+  pageHistory: string[]
+  historyCursor: number
   activeView: "chat" | "wiki" | "sources" | "search" | "graph" | "lint" | "review" | "skills" | "settings"
   llmConfig: LlmConfig
   /** Per-provider-preset stored overrides (API key, model, endpoint, …). */
@@ -424,6 +448,31 @@ interface WikiState {
   openPathInPreview: (path: string) => void
   openFileInPreview: (path: string, content: string) => void
   closePreview: () => void
+  /**
+   * Append `path` to the wiki preview history unless it matches the
+   * current cursor (avoid pushing the same page twice in a row).
+   * Truncates any "forward" trail, then caps the stack at
+   * `MAX_PAGE_HISTORY`.
+   */
+  pushPageHistory: (path: string) => void
+  /**
+   * Move `historyCursor` back by one and set `selectedFile` to that
+   * history entry. No-op when already at the start of the stack or
+   * when nothing is open.
+   */
+  goBack: () => void
+  /**
+   * Move `historyCursor` forward by one and set `selectedFile` to
+   * that entry. No-op when already at the end or when nothing is
+   * open. Companion to `goBack` — the stack is browser-style: new
+   * navigation truncates the forward trail (see `pushPageHistory`).
+   */
+  goForward: () => void
+  /**
+   * Drop the entire history. Called from `setSelectedFile(null)` so
+   * closing the preview doesn't let Alt+Left resurrect a closed page.
+   */
+  clearPageHistory: () => void
   setExternalPreview: (preview: ExternalPreview | null) => void
   setPendingScrollImageSrc: (src: string | null) => void
   setActiveView: (view: WikiState["activeView"]) => void
@@ -457,6 +506,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   externalPreview: null,
   previewReturnView: null,
   pendingScrollImageSrc: null,
+  pageHistory: [],
+  historyCursor: -1,
   activeView: "wiki",
   llmConfig: {
     provider: "openai",
@@ -485,27 +536,57 @@ export const useWikiStore = create<WikiState>((set) => ({
   setProjectPathIndexFromTree: (tree) =>
     set({ projectPathIndex: buildProjectPathIndexFromTree(tree) }),
   setSelectedFile: (selectedFile) =>
-    set({ selectedFile, previewContentPath: null, externalPreview: null }),
-  setFileContent: (fileContent) => set({ fileContent }),
-  openPathInPreview: (selectedFile) =>
     set((state) => ({
       selectedFile,
       previewContentPath: null,
       externalPreview: null,
-      activeView: "wiki",
-      previewReturnView:
-        state.activeView === "wiki" ? state.previewReturnView : state.activeView,
+      // Closing the preview (selectedFile -> null) should not leave a
+      // stale history behind that Alt+Left could resurrect. Opening an
+      // existing page (selectedFile set externally) shouldn't push
+      // either — only the open*Preview entry points do that.
+      pageHistory:
+        selectedFile == null ? [] : state.pageHistory,
+      historyCursor:
+        selectedFile == null ? -1 : state.historyCursor,
     })),
+  setFileContent: (fileContent) => set({ fileContent }),
+  openPathInPreview: (selectedFile) =>
+    set((state) => {
+      const history = appendToHistory(
+        state.pageHistory,
+        state.historyCursor,
+        selectedFile,
+      )
+      return {
+        selectedFile,
+        previewContentPath: null,
+        externalPreview: null,
+        activeView: "wiki",
+        previewReturnView:
+          state.activeView === "wiki" ? state.previewReturnView : state.activeView,
+        pageHistory: history.next,
+        historyCursor: history.cursor,
+      }
+    }),
   openFileInPreview: (selectedFile, fileContent) =>
-    set((state) => ({
-      selectedFile,
-      fileContent,
-      previewContentPath: selectedFile,
-      externalPreview: null,
-      activeView: "wiki",
-      previewReturnView:
-        state.activeView === "wiki" ? state.previewReturnView : state.activeView,
-    })),
+    set((state) => {
+      const history = appendToHistory(
+        state.pageHistory,
+        state.historyCursor,
+        selectedFile,
+      )
+      return {
+        selectedFile,
+        fileContent,
+        previewContentPath: selectedFile,
+        externalPreview: null,
+        activeView: "wiki",
+        previewReturnView:
+          state.activeView === "wiki" ? state.previewReturnView : state.activeView,
+        pageHistory: history.next,
+        historyCursor: history.cursor,
+      }
+    }),
   closePreview: () =>
     set((state) => ({
       selectedFile: null,
@@ -514,7 +595,50 @@ export const useWikiStore = create<WikiState>((set) => ({
       externalPreview: null,
       activeView: state.previewReturnView ?? "wiki",
       previewReturnView: null,
+      pageHistory: [],
+      historyCursor: -1,
     })),
+  pushPageHistory: (path) =>
+    set((state) => {
+      const history = appendToHistory(
+        state.pageHistory,
+        state.historyCursor,
+        path,
+      )
+      return {
+        pageHistory: history.next,
+        historyCursor: history.cursor,
+      }
+    }),
+  goBack: () =>
+    set((state) => {
+      if (state.historyCursor <= 0) return {}
+      const newCursor = state.historyCursor - 1
+      // Force `previewContentPath` to null so the preview panel's load
+      // effect actually re-reads the target file. Keeping it equal to
+      // `selectedFile` would short-circuit the effect (it assumes the
+      // content is already loaded), leaving `fileContent` pinned to the
+      // previous page and rendering the old wiki under the new filename.
+      return {
+        historyCursor: newCursor,
+        selectedFile: state.pageHistory[newCursor],
+        previewContentPath: null,
+        externalPreview: null,
+      }
+    }),
+  goForward: () =>
+    set((state) => {
+      if (state.historyCursor < 0) return {}
+      if (state.historyCursor >= state.pageHistory.length - 1) return {}
+      const newCursor = state.historyCursor + 1
+      return {
+        historyCursor: newCursor,
+        selectedFile: state.pageHistory[newCursor],
+        previewContentPath: null,
+        externalPreview: null,
+      }
+    }),
+  clearPageHistory: () => set({ pageHistory: [], historyCursor: -1 }),
   setExternalPreview: (externalPreview) => set({ externalPreview }),
   setPendingScrollImageSrc: (pendingScrollImageSrc) => set({ pendingScrollImageSrc }),
   setActiveView: (activeView) => set({ activeView, previewReturnView: null }),
@@ -627,5 +751,37 @@ export const useWikiStore = create<WikiState>((set) => ({
   resetGraphUiState: () => set({ graphUiState: createDefaultGraphUiState() }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
+
+/**
+ * Append `path` to the history, treating it as a fresh user navigation.
+ * Truncates anything past the cursor (browser-style "opening a link from
+ * history creates a new branch" semantics), drops consecutive duplicates
+ * so re-selecting the current page doesn't bloat the stack, and caps the
+ * total length at `MAX_PAGE_HISTORY` by dropping the oldest entry when
+ * full.
+ *
+ * Pure function — receives the current stack + cursor, returns the new
+ * stack + cursor. Kept outside the store body so each setter action can
+ * share one implementation without inlining the same logic five times.
+ */
+function appendToHistory(
+  history: string[],
+  cursor: number,
+  path: string,
+): { next: string[]; cursor: number } {
+  // Empty stack or path equals the current cursor entry → no-op.
+  if (cursor >= 0 && history[cursor] === path) {
+    return { next: history, cursor }
+  }
+  // Truncate the forward trail.
+  const truncated = cursor >= 0 ? history.slice(0, cursor + 1) : history.slice()
+  truncated.push(path)
+  // Cap by dropping the oldest entry.
+  const next =
+    truncated.length > MAX_PAGE_HISTORY
+      ? truncated.slice(truncated.length - MAX_PAGE_HISTORY)
+      : truncated
+  return { next, cursor: next.length - 1 }
+}
 
 export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProxyConfig, ScheduledImportConfig, SourceWatchConfig, ApiConfig }

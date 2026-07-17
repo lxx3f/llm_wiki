@@ -3563,10 +3563,16 @@ fn parse_agent_loop_action(raw: &str) -> AgentLoopAction {
     if looks_like_agent_tool_json(trimmed) {
         return AgentLoopAction {
             action: "invalid_tool_json".to_string(),
-            answer: Some(
-                "Invalid or truncated Agent tool JSON. Your previous response was cut off mid-string or missing required closing braces. Return one complete compact JSON object that fits in a single response. For large generated files, initialize with workspace.write_file and continue with workspace.append_file chunks instead of putting the whole file or heredocs in one JSON object. For large wiki pages, keep the markdown body short enough to fit in one JSON action, split the topic across multiple wiki/ pages, or use shell.exec with a heredoc to append additional content. Do not stuff an entire long page into one wiki.write_page content value."
-                    .to_string(),
-            ),
+            answer: Some(format!(
+                "Invalid or truncated Agent tool JSON. {diag} \
+                 Return one complete compact JSON object that fits in a single response. \
+                 Keep individual actions well under ~8 KB so the JSON comfortably fits in one model response — \
+                 anything larger risks token-limit truncation mid-string. \
+                 For large generated files, initialize with workspace.write_file and continue with workspace.append_file chunks instead of putting the whole file or heredocs in one JSON object. \
+                 For large wiki pages, keep the markdown body short enough to fit in one JSON action, split the topic across multiple wiki/ pages, or use shell.exec with a heredoc to append additional content. \
+                 Do not stuff an entire long page into one wiki.write_page content value.",
+                diag = diagnose_truncated_action(trimmed),
+            )),
             ..AgentLoopAction::default()
         };
     }
@@ -3586,6 +3592,178 @@ fn looks_like_agent_tool_json(value: &str) -> bool {
         && (trimmed.contains("\"action\"")
             || trimmed.contains("\"tool\"")
             || trimmed.contains("\"command\""))
+}
+
+/// Build a short diagnostic for an action JSON that failed to parse.
+/// Tells the next iteration's prompt what the model was attempting
+/// (tool name, last field being filled, total byte length, and tail
+/// state) so the retry knows whether to shrink a payload, switch
+/// tools, or fall back to a smaller chunk. Pure string scan — no
+/// JSON parsing, since parsing is exactly what just failed.
+fn diagnose_truncated_action(raw: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(format!("response length = {} bytes", raw.len()));
+    if let Some(tool) = extract_top_level_string_value(raw, "tool") {
+        parts.push(format!("attempted tool = {tool}"));
+    }
+    if let Some(field) = last_open_field_name(raw) {
+        parts.push(format!("last field being filled = \"{field}\""));
+    }
+    match detect_json_tail_state(raw) {
+        JsonTailState::UnterminatedString => parts.push("tail = unterminated string literal".to_string()),
+        JsonTailState::MissingClosingBrace => parts.push("tail = missing closing brace(s)".to_string()),
+        JsonTailState::UnexpectedToken => parts.push("tail = unexpected token".to_string()),
+        JsonTailState::LooksComplete => {}
+    }
+    format!("Diagnostic: {}", parts.join("; "))
+}
+
+/// Find the value of a top-level string field in the (possibly
+/// truncated) action JSON. Returns Some(value) if the field exists
+/// at the top level and its value parses as a JSON-style quoted
+/// string up to a closing quote. Falls back to None for nested,
+/// non-string, or missing fields.
+fn extract_top_level_string_value(raw: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let key_idx = raw.find(&needle)?;
+    let after_key = &raw[key_idx + needle.len()..];
+    // skip whitespace and the colon
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let mut chars = after_colon.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in chars {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            return Some(out);
+        }
+        out.push(ch);
+    }
+    // Ran out of input while still inside the string — that itself
+    // is the truncation signal; return what we decoded so far so the
+    // model sees a partial tool name in the diagnostic.
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Find the last `"<name>":` that appears before the truncation
+/// point, scanning backwards. Used to tell the model which field
+/// was being filled when the response was cut off (typically
+/// `content` for wiki.write_page, `answer` for final responses,
+/// `command` for shell.exec, `arguments` for MCP tools).
+fn last_open_field_name(raw: &str) -> Option<String> {
+    // Walk backwards looking for a `"name":` pattern. The field is
+    // "open" (still being filled) iff no closing quote for its
+    // value follows — but we approximate by checking that the last
+    // occurrence in the raw text has no terminated string after
+    // it. The approximation is fine because the truncation point
+    // is at the very end.
+    let bytes = raw.as_bytes();
+    let mut search_end = bytes.len();
+    while search_end > 0 {
+        // find the last `"` before search_end
+        let close_quote = bytes[..search_end].iter().rposition(|&b| b == b'"')?;
+        // find the matching `"` for the field name
+        let name_start_candidate = bytes[..close_quote].iter().rposition(|&b| b == b'"')?;
+        let name_bytes = &bytes[name_start_candidate + 1..close_quote];
+        // field name must be a valid identifier-ish (alnum + underscore)
+        if !name_bytes.is_empty()
+            && name_bytes.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            // check that this field isn't already closed (i.e. there's
+            // no closing quote + comma after its value yet)
+            let after = &bytes[close_quote + 1..];
+            if let Some(colon_offset) = after.iter().position(|&b| b == b':') {
+                let tail = &after[colon_offset + 1..];
+                if !looks_like_terminal_field_value(tail) {
+                    return Some(String::from_utf8_lossy(name_bytes).into_owned());
+                }
+            }
+        }
+        search_end = close_quote;
+    }
+    None
+}
+
+fn looks_like_terminal_field_value(tail: &[u8]) -> bool {
+    // A field whose value already terminated will look like `...,`
+    // or `...}` or whitespace+`,` / `}` in its tail. If instead the
+    // tail starts with a quote and is unterminated, this field is
+    // the one being filled.
+    let trimmed: Vec<u8> = tail.iter().copied().skip_while(|b| b.is_ascii_whitespace()).collect();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed[0] == b'"' {
+        // see if that string closes
+        let mut escaped = false;
+        for &b in &trimmed[1..] {
+            if escaped { escaped = false; continue; }
+            if b == b'\\' { escaped = true; continue; }
+            if b == b'"' { return true; }
+        }
+        return false;
+    }
+    // non-string value: check for `,` or `}` — if present, the
+    // field terminated cleanly
+    trimmed.iter().any(|&b| b == b',' || b == b'}')
+}
+
+#[derive(Debug)]
+enum JsonTailState {
+    LooksComplete,
+    UnterminatedString,
+    MissingClosingBrace,
+    UnexpectedToken,
+}
+
+fn detect_json_tail_state(raw: &str) -> JsonTailState {
+    let trimmed = raw.trim_end();
+    if trimmed.ends_with('}') {
+        return JsonTailState::LooksComplete;
+    }
+    // Walk back from the end, ignoring trailing whitespace, to find
+    // the last meaningful character.
+    let bytes = trimmed.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    if i == 0 {
+        return JsonTailState::UnexpectedToken;
+    }
+    let last = bytes[i - 1];
+    if last == b'"' {
+        // ends with a closing quote — could be complete value, but
+        // we already ruled out the whole-string-ending-with-} case.
+        // Likely the response was cut inside the string and the
+        // unterminated string literal is the open one before the
+        // last quote. Conservatively report missing brace.
+        return JsonTailState::MissingClosingBrace;
+    }
+    if last.is_ascii_alphabetic() || last.is_ascii_digit() {
+        // mid-token; likely the string content was truncated mid-line
+        return JsonTailState::UnterminatedString;
+    }
+    if last == b'{' || last == b'[' || last == b',' {
+        return JsonTailState::MissingClosingBrace;
+    }
+    JsonTailState::UnexpectedToken
 }
 
 fn normalize_agent_loop_action(mut action: AgentLoopAction) -> AgentLoopAction {
@@ -5732,6 +5910,30 @@ mod tests {
             answer.contains("shell.exec with a heredoc"),
             "rejection should mention the shell.exec heredoc fallback"
         );
+    }
+
+    #[test]
+    fn diagnose_truncated_action_extracts_tool_and_open_field() {
+        // wiki.write_page attempt whose content field is still being filled.
+        let raw = r##"{"action":"tool","tool":"wiki.write_page","path":"wiki/x.md","content":"# Heading"##;
+        let diag = diagnose_truncated_action(raw);
+        assert!(diag.contains("wiki.write_page"), "tool name missing: {diag}");
+        assert!(
+            diag.contains("content"),
+            "open field 'content' missing: {diag}"
+        );
+        assert!(
+            diag.contains("bytes"),
+            "byte count missing: {diag}"
+        );
+    }
+
+    #[test]
+    fn diagnose_truncated_action_handles_final_answer_field() {
+        // final action whose answer field was being filled.
+        let raw = r##"{"action":"final","answer":"Here is what I found about MiniMax integration in transformers"##;
+        let diag = diagnose_truncated_action(raw);
+        assert!(diag.contains("answer"), "open field 'answer' missing: {diag}");
     }
 
     #[test]

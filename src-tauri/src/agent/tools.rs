@@ -601,7 +601,10 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "workspace.write_file".to_string(),
             description:
-                "Write a generated artifact file under the visible agent-workspace directory."
+                "Write or overwrite a generated artifact file under the visible agent-workspace directory. \
+                 Use this for any output file the user should see (HTML reports, SVG/PNG cover images, generated scripts, downloaded data dumps). \
+                 For LARGE files (over ~6 KB of content), initialize with workspace.write_file and then continue with one or more workspace.append_file chunks instead of stuffing the whole thing into one write — a single content field that exceeds the model's token limit gets truncated mid-string. \
+                 Generated scripts in agent-workspace can be invoked from shell.exec (`python script.py`, `bash run.sh`)."
                     .to_string(),
             effects: vec![ToolEffect::Write],
             parameters: Some(serde_json::json!({
@@ -619,7 +622,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "workspace.append_file".to_string(),
             description:
-                "Append generated artifact content under agent-workspace. Use after workspace.write_file for large HTML/PPT files."
+                "Append content to an existing generated artifact under agent-workspace. Use after workspace.write_file for large HTML/PPT files or any content that would not fit in one model response. Each call adds one chunk; iterate until the file is complete."
                     .to_string(),
             effects: vec![ToolEffect::Write],
             parameters: Some(serde_json::json!({
@@ -637,14 +640,28 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "shell.exec".to_string(),
             description:
-                "Run a project-scoped shell command requested by an active skill instruction."
+                "Run a shell command for code research, library introspection, or any command-line work the user asks for. \
+                 The process runs with cwd = <project>/agent-workspace/ — use relative paths to reference project files. \
+                 Field name in the action JSON MUST be `command` (not `path` / `content` / `query`). \
+                 For Enhanced shell mode (the default in Settings): common dev tools (cat, head, grep, rg, sed, awk, find, jq, python, pip, uv, git, node, npm, cargo, go, etc.) are auto-approved even when arguments point to site-packages or other external paths; only network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), destructive system paths, and shell substitution ($() / backticks) always require explicit approval. \
+                 PAYLOAD SIZE: keep the `command` string well under ~8 KB. Commands larger than that risk getting truncated mid-string by the model's token limit, which surfaces as \"Invalid or truncated Agent tool JSON\" — not a permission error. \
+                 FOR LARGE SCRIPTS: do not inline multi-line Python or shell scripts in the `command` field. Write the script to agent-workspace via workspace.write_file first (e.g. `scripts/inspect.py`), then call shell.exec with `python scripts/inspect.py` or `bash scripts/run.sh`. This both fits the budget and lets you iterate on the script across iterations. \
+                 USEFUL PATTERNS: `python -c \"import transformers; print(transformers.__file__)\"` to locate a package; `rg -l <symbol> <path>` to find files; `python -c \"import inspect; print(inspect.getsource(symbol))\"` to dump a class/function definition; pipe through `head`, `awk`, `jq` to trim large outputs to what matters."
                     .to_string(),
             effects: vec![ToolEffect::Read, ToolEffect::Process],
             parameters: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string" },
-                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": SHELL_EXEC_TIMEOUT_SECS }
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to run. Use `command`, not `path` / `content` / `query`. Keep well under ~8 KB; for multi-line scripts, write the script to a workspace file first and invoke it."
+                    },
+                    "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": SHELL_EXEC_TIMEOUT_SECS,
+                        "description": "Optional. Defaults to 30s. Raise for known long-running commands (e.g. package builds)."
+                    }
                 },
                 "required": ["command"]
             })),

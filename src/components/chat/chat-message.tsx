@@ -1375,6 +1375,26 @@ function derivePreview(tool: string, output: string): string | null {
     return null
   }
 
+  if (normalizedTool === "workspace.read_file") {
+    // workspace.read_file uses the same cat -n line-numbered format as
+    // wiki.read_page, but workspace files don't always have markdown
+    // headings — fall back to first non-empty line.
+    const heading = output.match(/^#+\s+(.+)$/m)
+    if (heading) return `→ ${heading[1]}`
+    const first = output.split("\n").find((line) => line.trim().length > 0)
+    return first ? `→ ${first.replace(/^\s*\d+\s+/, "")}` : null
+  }
+
+  if (
+    normalizedTool === "wiki.edit_page"
+    || normalizedTool === "workspace.edit_file"
+  ) {
+    // Output format: "edited <path> (N replacement(s))" — surface the
+    // path so the collapsed row hints at what changed.
+    const match = output.match(/^edited\s+(\S+)/m)
+    return match ? `→ ${match[1]}` : null
+  }
+
   return null
 }
 

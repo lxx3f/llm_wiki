@@ -879,13 +879,13 @@ impl AgentRuntime {
                     .filter(|reference| reference.kind == "wiki")
                     .take(2)
                     .filter_map(|reference| {
-                        tools::read_wiki_page(&self.project_path, &reference.path)
+                        tools::read_wiki_page(&self.project_path, &reference.path, None, None)
                             .ok()
-                            .map(|content| {
+                            .map(|read| {
                                 format!(
                                     "Excerpt from {}:\n{}",
                                     reference.path,
-                                    collapse_whitespace(&content)
+                                    collapse_whitespace(&read.content)
                                         .chars()
                                         .take(2_000)
                                         .collect::<String>()
@@ -2656,13 +2656,23 @@ impl AgentRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or("wiki page");
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
-                // Preserve markdown structure (newlines, list indentation,
-                // code-fence boundaries) instead of collapsing all
-                // whitespace — otherwise the Agent Activity feed shows a
-                // single-line wall of text with headings/lists/code blocks
-                // indistinguishable. The cap is raised slightly (4K → 6K)
-                // to compensate for the extra whitespace overhead.
-                let mut summary = format!("read {path}\n{}", trim_chars(content, 6_000));
+                let start_line = value.get("startLine").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let end_line = value.get("endLine").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let total_lines = value.get("totalLines").and_then(Value::as_u64).unwrap_or(0) as usize;
+                // Line-numbered content is already baked in by read_wiki_page
+                // (cat -n format). When offset/limit is used, the summary
+                // notes which slice was returned so the agent (and user)
+                // can request the next chunk without guessing.
+                let range_note = if start_line > 1 || (total_lines > 0 && end_line < total_lines) {
+                    format!(" [lines {}-{} of {}]", start_line, end_line, total_lines)
+                } else {
+                    String::new()
+                };
+                let mut summary = format!(
+                    "read {path}{}\n{}",
+                    range_note,
+                    trim_chars(content, 6_000)
+                );
                 if let Some(context) = value
                     .get("knowledgeContext")
                     .filter(|value| !value.is_null())
@@ -2792,6 +2802,78 @@ impl AgentRuntime {
                     trim_chars(&output.stderr, 10_000)
                 ) + &generated_summary)
             }
+            "wiki.edit_page" => {
+                let output: tools::WikiEditOutput = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid wiki.edit_page result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::FileChanged {
+                        path: output.reference.path.clone(),
+                        tool: "wiki.edit_page".to_string(),
+                        existed_before: true,
+                        previous_content: output.previous_content.clone(),
+                    },
+                );
+                let reference = output.reference.clone();
+                let path = reference.path.clone();
+                push_unique_reference(references, events, event_sink, reference);
+                Ok(format!(
+                    "edited {path} ({} replacement{})",
+                    output.replacements,
+                    if output.replacements == 1 { "" } else { "s" }
+                ))
+            }
+            "workspace.read_file" => {
+                let output: tools::WikiReadOutput = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid workspace.read_file result: {err}"))?;
+                Ok(format!(
+                    "read {} (lines {}-{} of {})",
+                    output.path,
+                    output.start_line,
+                    output.end_line,
+                    output.total_lines
+                ))
+            }
+            "workspace.edit_file" => {
+                let output: tools::WorkspaceEditOutput = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid workspace.edit_file result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::FileChanged {
+                        path: output.path.clone(),
+                        tool: "workspace.edit_file".to_string(),
+                        existed_before: output.existed_before,
+                        previous_content: output.previous_content.clone(),
+                    },
+                );
+                let reference = AgentReference {
+                    title: Path::new(&output.path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&output.path)
+                        .to_string(),
+                    path: output.path.clone(),
+                    kind: "workspace".to_string(),
+                    snippet: Some(format!(
+                        "Edited by Agent ({} bytes, {} replacement{}).",
+                        output.bytes,
+                        output.replacements,
+                        if output.replacements == 1 { "" } else { "s" }
+                    )),
+                    score: None,
+                    knowledge_context: None,
+                };
+                push_unique_reference(references, events, event_sink, reference);
+                Ok(format!(
+                    "edited {} ({} bytes, {} replacement{})",
+                    output.path,
+                    output.bytes,
+                    output.replacements,
+                    if output.replacements == 1 { "" } else { "s" }
+                ))
+            }
             _ => Ok(value.to_string()),
         }
     }
@@ -2831,6 +2913,8 @@ impl AgentRuntime {
             "source.search",
             "graph.search",
             "wiki.write_page",
+            "wiki.edit_page",
+            "wiki.read_page",
         ];
         if tools.web {
             available.push("web.search");
@@ -2841,13 +2925,15 @@ impl AgentRuntime {
         if skills_enabled {
             available.push("skill.read_file");
             available.push("workspace.write_file");
+            available.push("workspace.read_file");
+            available.push("workspace.edit_file");
             available.push("shell.exec");
         }
         let system = "You are an agent tool planner. Return only compact JSON. Do not explain.";
         let skill_context = render_skill_planner_context(skills, skill_mode);
         let workspace = agent_workspace_display(&self.project_path);
         let user = format!(
-            "User request:\n{message}\n\nSkill context:\n{skill_context}\n\nAvailable tools: {}\n\nAgent workspace for generated files: {workspace}\n\nReturn JSON exactly like {{\"toolCalls\":[{{\"tool\":\"wiki.search\",\"query\":\"short query\"}}]}}. Use an empty array when no tool is needed. The skill context and tool list above are already available to the assistant; do not call wiki.search, source.search, graph.search, web.search, anytxt.search, skill.read_file, workspace.write_file, or shell.exec merely to list, explain, or summarize the currently available skills, tools, modes, or agent capabilities. Use wiki.search for factual or topical retrieval. Prefer graph.search for relationships, dependencies, neighborhoods, backlinks, or connections between entities; pass concise entity or concept names instead of the full question. The planner may select both when the answer needs page content and graph structure. Prefer web.search only for current/external information. Prefer anytxt.search only for user files outside the wiki. Use wiki.write_page only when the user explicitly asks to create a wiki page; include path under wiki/ ending in .md and full Markdown content. Existing pages are create-only by default; include allowOverwrite:true only when the user explicitly asks to overwrite or update an existing wiki page. Use skill.read_file for Markdown/reference files inside an active skill directory. Use workspace.write_file for generated artifacts under agent-workspace; do not inline large heredocs or generated file bodies inside shell.exec. Use shell.exec only when a relevant active skill requires a command-line operation after any large files have been written. shell.exec runs from the Agent workspace; commands that generate files must write them under that workspace and must not write to home, Desktop, Downloads, system temp folders, hidden app metadata folders, or skill installation folders.",
+            "User request:\n{message}\n\nSkill context:\n{skill_context}\n\nAvailable tools: {}\n\nAgent workspace for generated files: {workspace}\n\nReturn JSON exactly like {{\"toolCalls\":[{{\"tool\":\"wiki.search\",\"query\":\"short query\"}}]}}. Use an empty array when no tool is needed. The skill context and tool list above are already available to the assistant; do not call wiki.search, source.search, graph.search, web.search, anytxt.search, skill.read_file, workspace.write_file, workspace.read_file, workspace.edit_file, or shell.exec merely to list, explain, or summarize the currently available skills, tools, modes, or agent capabilities. Use wiki.search for factual or topical retrieval. Prefer graph.search for relationships, dependencies, neighborhoods, backlinks, or connections between entities; pass concise entity or concept names instead of the full question. The planner may select both when the answer needs page content and graph structure. Prefer web.search only for current/external information. Prefer anytxt.search only for user files outside the wiki. Use wiki.write_page only when the user explicitly asks to create or rewrite a wiki page; include path under wiki/ ending in .md and full Markdown content. Existing pages are overwritten by default (ClaudeCode Write semantics); include allowOverwrite:false only when you specifically want a create-only guard. Use wiki.edit_page (old_string → new_string) to apply a targeted change to an existing wiki page — prefer this over wiki.write_page when only a few lines change. Use wiki.read_page for fetching a page body; it supports offset + limit (1-indexed) to paginate large pages. Use skill.read_file for Markdown/reference files inside an active skill directory. Use workspace.write_file for generated artifacts under agent-workspace; do not inline large heredocs or generated file bodies inside shell.exec. Use workspace.read_file / workspace.edit_file to inspect or patch generated scripts in agent-workspace. Use shell.exec only when a relevant active skill requires a command-line operation after any large files have been written. shell.exec runs from the Agent workspace; commands that generate files must write them under that workspace and must not write to home, Desktop, Downloads, system temp folders, hidden app metadata folders, or skill installation folders.",
             available.join(", "),
         );
         let client = LlmClient::new(config.clone())?
@@ -3482,10 +3568,11 @@ fn build_agent_loop_user(
     out.push_str("\n\nAvailable Agent tools for this turn:\n");
     if request.tools.wiki {
         out.push_str("- wiki.search: retrieve wiki pages for factual or topical questions.\n");
-        out.push_str("- wiki.read_page: read a specific wiki markdown page by path.\n");
+        out.push_str("- wiki.read_page: read a specific wiki markdown page by path. Supports optional offset + limit (1-indexed line numbers) for paginating large pages; response is line-numbered for use with wiki.edit_page.\n");
         out.push_str("- source.search: search raw source snippets.\n");
         out.push_str("- graph.search: retrieve relationships, neighbors, backlinks, dependencies, and connections between entities. Prefer it for relational questions and query with concise entity or concept names.\n");
-        out.push_str("- wiki.write_page: create a wiki markdown page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
+        out.push_str("- wiki.write_page: create or overwrite a Markdown wiki page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". Overwrites existing pages by default (ClaudeCode Write semantics); pass allowOverwrite=false for an explicit create-only guard. The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
+        out.push_str("- wiki.edit_page: apply a targeted string replacement to an existing wiki page (old_string → new_string). By default rejects ambiguous matches; pass replace_all=true to batch-replace. Prefer this over wiki.write_page when only a few lines change.\n");
     }
     if request.tools.web {
         out.push_str("- web.search: search external web sources.\n");
@@ -3515,6 +3602,8 @@ fn build_agent_loop_user(
             out.push_str("- user.ask: pause and show the user a structured form with single-choice, multi-choice, text, textarea, or confirmation fields when an active skill needs user input.\n");
             out.push_str("- workspace.write_file: write generated artifacts under agent-workspace by relative path. For large HTML/PPT, initialize the file and then append chunks.\n");
             out.push_str("- workspace.append_file: append content to a generated artifact under agent-workspace. Prefer this for large HTML/PPT after workspace.write_file.\n");
+            out.push_str("- workspace.read_file: read a file from agent-workspace by relative path. Same offset + limit semantics as wiki.read_page.\n");
+            out.push_str("- workspace.edit_file: apply a targeted string replacement to a file in agent-workspace (old_string → new_string). Same uniqueness rules as wiki.edit_page.\n");
         }
         if shell_listed {
             out.push_str("- shell.exec: run a shell command for code research, library introspection, or any command-line work the user asks for. Workspace-local commands run directly. With Enhanced shell mode enabled (the default in Settings), common dev tools (cat, head, grep, rg, sed, awk, find, jq, python, pip, uv, git, node, npm, cargo, go, etc.) also run without per-call prompts even when arguments reference external files; only network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), destructive system paths, and shell substitution always require approval. Prefer shell.exec over web.search when the user asks about a locally installed Python library (e.g. \"查一下本地的transformers库是否集成了X\") — use `python -c \"import inspect; ...\"` or `rg <symbol>` to read the on-disk source directly. Note: shell.exec no longer requires an active skill when Enhanced shell mode is on.\n");

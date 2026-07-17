@@ -222,8 +222,11 @@ function normalizeBackendToolName(tool: string) {
   if (normalized === "wiki_search") return "wiki_search" as const
   if (normalized === "wiki_read_page") return "project_file_read" as const
   if (normalized === "wiki_write_page") return "project_files" as const
+  if (normalized === "wiki_edit_page") return "project_files" as const
   if (normalized === "workspace_write_file") return "project_files" as const
   if (normalized === "workspace_append_file") return "project_files" as const
+  if (normalized === "workspace_read_file") return "project_file_read" as const
+  if (normalized === "workspace_edit_file") return "project_files" as const
   if (normalized === "skills_load") return "project_file_read" as const
   if (normalized === "context_attach") return "project_file_read" as const
   if (normalized === "skill_read_file") return "project_file_read" as const

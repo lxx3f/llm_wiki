@@ -115,3 +115,49 @@ function replaceWikilinks(text: string): string {
     return `[${escapedLabel}](${href})`
   })
 }
+
+/**
+ * Walk the markdown body and return every wikilink reference as
+ * `{ slug, label }` pairs. Skips the same fenced code blocks / inline
+ * code spans that `transformWikilinks` skips so wikilinks shown as
+ * code examples in documentation aren't reported as broken links.
+ *
+ * Slug is the raw target (so `[[foo bar]]` yields slug `"foo bar"`,
+ * not `"foo%20bar"`); the renderer / existence check should pass the
+ * same value it would to `resolveRelatedSlug`. Label is what the user
+ * sees as the clickable text (alias if present, otherwise the slug).
+ */
+export function collectWikilinkRefs(body: string): WikilinkRef[] {
+  if (!body.includes("[[")) return []
+
+  const refs: WikilinkRef[] = []
+  const visit = (chunk: string) => {
+    for (const match of chunk.matchAll(WIKILINK_RE)) {
+      const target = match[1].trim()
+      const alias = match[2]?.trim() ?? ""
+      refs.push({ slug: target, label: alias.length > 0 ? alias : target })
+    }
+  }
+
+  // Skip fenced code blocks first (those were the original code,
+  // unmodified by the transform), then inline-code spans inside
+  // what remains. Mirrors the layout in `transformWikilinks`.
+  const fenceParts = body.split(/(```[\s\S]*?```)/g)
+  fenceParts.forEach((part, idx) => {
+    if (idx % 2 === 1) return
+    const codeParts = part.split(/(`[^`\n]+`)/g)
+    codeParts.forEach((subPart, subIdx) => {
+      if (subIdx % 2 === 1) return
+      visit(subPart)
+    })
+  })
+
+  return refs
+}
+
+export interface WikilinkRef {
+  /** Raw target — same shape `resolveRelatedSlug` expects. */
+  slug: string
+  /** What the user sees as the link text (alias if present, else slug). */
+  label: string
+}

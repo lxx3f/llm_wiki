@@ -199,7 +199,7 @@ export function WikiReader({ body, sourceBody, sourceOffset = 0, filePath }: Wik
                   isMissing
                     ? t("nav.missingHint", { slug })
                     : h
-                      ? (isWikilink ? (slug ?? h.slice(1)) : h)
+                      ? (isWikilink ? (slug ?? h.slice(1)) : safeDecodeHref(h))
                       : undefined
                 }
                 data-missing={isMissing ? "true" : undefined}
@@ -321,5 +321,21 @@ function safeDecodeFragment(fragment: string): string {
     return decodeURIComponent(fragment)
   } catch {
     return fragment
+  }
+}
+
+/**
+ * Best-effort decode of a full href (used for the hover tooltip on
+ * external / relative links). Uses `decodeURI` rather than
+ * `decodeURIComponent` so URL structure (`?`, `&`, `=`, `/`, `#`) is
+ * preserved while still turning `%E4%B8%AD` back into `中` for
+ * display. Click handling still uses the original `h` so the actual
+ * navigation is unaffected.
+ */
+function safeDecodeHref(href: string): string {
+  try {
+    return decodeURI(href)
+  } catch {
+    return href
   }
 }

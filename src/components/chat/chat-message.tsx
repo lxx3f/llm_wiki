@@ -38,6 +38,7 @@ import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-types"
 import { AgentFileActivity } from "@/components/chat/agent-file-activity"
 import { ReferenceKnowledgeGraph } from "@/components/chat/reference-knowledge-graph"
+import { PerParagraphTrigger } from "@/components/chat/annotation/PerParagraphTrigger"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 
@@ -174,7 +175,7 @@ function ChatMessageImpl({
             {isUser ? (
               <p dir="auto" className="whitespace-pre-wrap break-words">{message.content}</p>
             ) : (
-              <MarkdownContent content={message.content} />
+              <AssistantParagraphs content={message.content} parentMessageId={message.id} />
             )}
           </div>
         )}
@@ -1702,6 +1703,40 @@ function agentStageIcon(stage: ChatAgentEventStage) {
     default:
       return Sparkles
   }
+}
+
+/**
+ * Renders assistant content split by blank lines into paragraphs.
+ *
+ * Each paragraph is wrapped in a `group relative` container so the
+ * `PerParagraphTrigger` button (which uses Tailwind's
+ * `group-hover:` opacity utility) only appears while the user is
+ * hovering that specific paragraph. The trigger creates an
+ * annotation bound to the whole paragraph text — no selection
+ * required — complementing the right-click "follow up" entry on
+ * `ChatAnnotationTrigger` (which targets a selected snippet).
+ *
+ * Splitting on `\n\n+` matches the markdown blank-line paragraph
+ * separator. A single-paragraph message collapses to one wrapper
+ * with no visible change to existing layout. Citations are still
+ * extracted from the full `content` in `CitedReferencesPanel`, so
+ * the per-paragraph split only affects rendering, not reference
+ * resolution.
+ */
+function AssistantParagraphs({ content, parentMessageId }: { content: string; parentMessageId: string }) {
+  const paragraphs = content.split(/\n\n+/)
+  return (
+    <div data-message-id={parentMessageId}>
+      {paragraphs.map((p, i) => (
+        <div key={i} className="group relative">
+          <MarkdownContent content={p} />
+          <div className="absolute right-0 top-0">
+            <PerParagraphTrigger paragraph={p} parentMessageId={parentMessageId} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function MarkdownContent({ content }: { content: string }) {

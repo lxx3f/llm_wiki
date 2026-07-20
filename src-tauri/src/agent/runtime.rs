@@ -84,6 +84,11 @@ const SHELL_DENY_TOKENS: &[&str] = &[
     "curl", "wget", "scp", "ssh", "nc", "telnet", "rsync", "ftp",
     // Privilege escalation
     "sudo", "doas", "runas", "su",
+    // Command wrappers and interpreters make it unsafe to infer the actual
+    // child program from a flat command line. Keep them behind the same manual
+    // approval boundary rather than trying to parse all shell semantics.
+    "env", "command", "exec", "sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh",
+    "xargs", "nice", "nohup",
 ];
 
 /// Substrings that always require approval, regardless of the binary match.
@@ -105,7 +110,7 @@ const SHELL_DENY_SUBSTRINGS: &[&str] = &[
     // Shell substitution — already blocked by conservative scope, repeated
     // here so Enhanced mode rejects it too even when the wrapping binary
     // (e.g. `echo`) is on the safe list.
-    "$(",
+    "$(", "`",
     // Protected system paths (writes to system config / boot / runtime state).
     "/etc/",
     "/boot/",
@@ -1578,45 +1583,11 @@ impl AgentRuntime {
             .flat_map(|session| session.snapshot_definitions())
             .collect();
 
-        if let Some(command) = request
-            .shell_command
-            .as_deref()
-            .map(str::trim)
-            .filter(|command| !command.is_empty())
-        {
-            if is_shell_command_allowed_without_prompt(
-                command,
-                &request.approved_shell_commands,
-                &self.project_path,
-                self.enhanced_shell_mode,
-            ) {
-                let approved_action = AgentLoopAction {
-                    action: "tool".to_string(),
-                    tool: Some("shell.exec".to_string()),
-                    command: Some(command.to_string()),
-                    timeout_seconds: None,
-                    ..AgentLoopAction::default()
-                };
-                let observation = self
-                    .execute_agent_loop_tool(
-                        request,
-                        &session_id,
-                        &approved_action,
-                        &permission_policy,
-                        &tool_registry,
-                        &skills,
-                        &mut references,
-                        &mut tool_events,
-                        &mut events,
-                        &event_sink,
-                        cancellation,
-                        &external_mcp_sessions,
-                        &external_mcp_tool_map,
-                    )
-                    .await?;
-                observations.push(observation);
-            }
-        }
+        // `shell_command` identifies the exact command whose approval is carried
+        // in `approved_shell_commands`. Do not pre-execute it here: the model's
+        // normal `shell.exec` tool action performs it once, preserving a single
+        // action/result observation in the loop and avoiding duplicate side
+        // effects when the resume prompt reaches the same command.
 
         for iteration in 0..max_iterations {
             check_cancel(cancellation)?;
@@ -4393,17 +4364,22 @@ fn is_shell_command_allowed_without_prompt(
     project_path: &str,
     enhanced_mode: bool,
 ) -> bool {
-    // Hard deny gate when Enhanced shell mode is on: any command that hits
-    // `SHELL_DENY_TOKENS` or `SHELL_DENY_SUBSTRINGS` must always require an
-    // approval, regardless of safe-binary membership or workspace scope. We
-    // intentionally do NOT apply this gate when enhanced_mode is false, so
-    // the conservative path-scope check continues to behave exactly as
-    // before for users who opt out.
-    if enhanced_mode && shell_command_hits_deny_patterns(command) {
+    // A user-approved exact command is the only route through the manual
+    // approval boundary. It must be checked first so commands that were
+    // deliberately held for approval (network, privilege escalation, etc.)
+    // can execute after the user explicitly authorizes that exact string.
+    if is_shell_command_approved(command, approved) {
+        return true;
+    }
+
+    // These patterns always require explicit approval, regardless of Enhanced
+    // shell mode. They must be checked before either workspace scope or a safe
+    // binary can auto-allow the command.
+    if shell_command_hits_deny_patterns(command) {
         return false;
     }
-    is_shell_command_approved(command, approved)
-        || is_shell_command_scoped_to_agent_workspace(command, project_path)
+
+    is_shell_command_scoped_to_agent_workspace(command, project_path)
         || (enhanced_mode && shell_command_uses_safe_binary(command))
 }
 
@@ -4413,23 +4389,58 @@ fn is_shell_command_allowed_without_prompt(
 /// The deny-pattern gate is consulted separately via
 /// `shell_command_hits_deny_patterns`.
 fn shell_command_uses_safe_binary(command: &str) -> bool {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return false;
+    let programs = shell_command_program_tokens(command);
+    !programs.is_empty() && programs.iter().all(|program| {
+        let basename = std::path::Path::new(program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(program);
+        SHELL_SAFE_BINARIES.contains(&basename)
+    })
+}
+
+/// Extract the executable token at the beginning of every unquoted shell
+/// command segment. Arguments are intentionally ignored: `python -c "..."`
+/// is still a Python invocation, while `echo ok; sudo id` exposes both `echo`
+/// and `sudo` for safe-binary and deny-token checks.
+fn shell_command_program_tokens(command: &str) -> Vec<String> {
+    let mut programs = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut expecting_program = true;
+
+    for ch in command.chars() {
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            } else if expecting_program {
+                current.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            ch if matches!(ch, ';' | '|' | '&') => {
+                if expecting_program && !current.is_empty() {
+                    programs.push(std::mem::take(&mut current));
+                }
+                current.clear();
+                expecting_program = true;
+            }
+            ch if ch.is_whitespace() => {
+                if expecting_program && !current.is_empty() {
+                    programs.push(std::mem::take(&mut current));
+                    expecting_program = false;
+                }
+            }
+            _ if expecting_program => current.push(ch),
+            _ => {}
+        }
     }
-    let program_token = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_matches(|ch| matches!(ch, '"' | '\''));
-    if program_token.is_empty() {
-        return false;
+    if expecting_program && !current.is_empty() {
+        programs.push(current);
     }
-    let program_basename = std::path::Path::new(program_token)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program_token);
-    SHELL_SAFE_BINARIES.contains(&program_basename)
+    programs
 }
 
 /// True when `command` matches any of the hard-deny token or substring
@@ -4455,11 +4466,14 @@ fn shell_command_hits_deny_patterns(command: &str) -> bool {
     false
 }
 
-/// True when `token` appears as a separate whitespace-delimited word in
-/// `command_lower` (already lowercased by the caller). Avoids matching `curl`
-/// inside `curlie` or `scp` inside `scpwrap`.
+/// True when `token` appears as a shell token in `command_lower` (already
+/// lowercased by the caller). Shell operators are separators, so a chained
+/// command such as `echo ok;sudo id` cannot hide a denied executable behind a
+/// safe first binary.
 fn shell_command_contains_token(command_lower: &str, token: &str) -> bool {
-    command_lower.split_whitespace().any(|word| word == token)
+    shell_command_program_tokens(command_lower)
+        .iter()
+        .any(|word| word == token)
 }
 
 fn is_shell_command_scoped_to_agent_workspace(command: &str, project_path: &str) -> bool {
@@ -6907,19 +6921,19 @@ mod tests {
         let project = "/Users/test/Project";
 
         assert!(is_shell_command_allowed_without_prompt(
-            "cat ppt/index.html | head -100",
+            "cat ppt/index.html",
             &[],
             project,
             false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
-            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html | head -30",
+            "grep -n data-layout ppt/index.html",
             &[],
             project,
             false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
-            "mkdir -p deck && node scripts/validate.js deck/index.html",
+            "node scripts/validate.js deck/index.html",
             &[],
             project,
             false,
@@ -6930,6 +6944,34 @@ mod tests {
             project,
             false,
         ));
+    }
+
+    #[test]
+    fn shell_chains_and_deny_patterns_require_explicit_approval() {
+        let project = "/Users/test/Project";
+        for command in [
+            "echo harmless;sudo id",
+            "env sudo id",
+            "command sudo id",
+            "sh -c 'sudo id'",
+            "env curl https://example.com/file",
+            "echo `id`",
+            "curl https://example.com/file",
+        ] {
+            assert!(
+                !is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to require approval"
+            );
+            assert!(
+                is_shell_command_allowed_without_prompt(
+                    command,
+                    &[command.to_string()],
+                    project,
+                    true,
+                ),
+                "expected exact approval to allow `{command}`"
+            );
+        }
     }
 
     #[test]
@@ -7025,11 +7067,8 @@ mod tests {
     fn enhanced_mode_reading_protected_system_paths_still_requires_approval() {
         let project = "/Users/test/Project";
 
-        // These commands have no external-path tokens, so the conservative
-        // path-scope check ALLOWS them. Enhanced mode must DENY them via the
-        // protected-path deny substrings (/etc/, /boot/, /proc/, /sys/,
-        // C:\Windows) — closing the gap where the agent could otherwise
-        // silently read sensitive system files through `python -c "open(...)"`.
+        // Protected paths always require an explicit approval, even when
+        // Enhanced shell mode is disabled.
         for command in [
             // /etc/ — system config, must require approval even via python.
             "python -c \"open('/etc/passwd').read()\"",
@@ -7041,12 +7080,12 @@ mod tests {
             "python -c \"open('C:\\\\Windows\\\\System32\\\\config').read()\"",
         ] {
             assert!(
-                is_shell_command_allowed_without_prompt(command, &[], project, false),
-                "conservative scope happens to allow `{command}`; this is the gap enhanced mode closes"
+                !is_shell_command_allowed_without_prompt(command, &[], project, false),
+                "expected `{command}` to require approval with enhanced mode off"
             );
             assert!(
                 !is_shell_command_allowed_without_prompt(command, &[], project, true),
-                "expected `{command}` to require approval even with enhanced mode on"
+                "expected `{command}` to require approval with enhanced mode on"
             );
         }
     }
@@ -7113,30 +7152,22 @@ mod tests {
     }
 
     #[test]
-    fn enhanced_mode_disabled_preserves_existing_behavior() {
-        // Re-run the full battery of the conservative path-scope tests with
-        // enhanced_mode=false. Results must be byte-identical to today.
+    fn enhanced_mode_disabled_preserves_conservative_safe_commands() {
         let project = "/Users/test/Project";
 
-        // Commands the conservative scope accepts.
         for ok_cmd in [
-            "cat ppt/index.html | head -100",
-            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html | head -30",
-            "mkdir -p deck && node scripts/validate.js deck/index.html",
+            "cat ppt/index.html",
+            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html",
             "python -c \"import inspect; print(1)\"",
             "git log --oneline -10",
-            // The conservative scope happens to allow these — they have no
-            // external-path tokens. Enhanced mode closes that gap.
-            "python -c \"open('/etc/passwd').read()\"",
-            "sudo apt install curl",
         ] {
             assert!(
                 is_shell_command_allowed_without_prompt(ok_cmd, &[], project, false),
                 "conservative scope should still allow `{ok_cmd}`"
             );
         }
-        // Commands the conservative scope rejects (because they contain
-        // external-path tokens or network substrings).
+        // Commands that require approval because they contain external paths,
+        // privileged/network operations, or shell control syntax.
         for blocked_cmd in [
             "cat /Users/test/.agents/skills/skill/SKILL.md",
             "cp ~/Desktop/file.png images/file.png",

@@ -32,12 +32,14 @@ import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
 import { inferWikiTypeFromPath } from "@/lib/wiki-page-types"
 import { cleanAssistantContentForWikiSave, titleFromCleanAssistantContent } from "@/lib/chat-save-to-wiki"
-import type { ChatAgentEvent, ChatAgentEventStage, ChatAgentStep, ChatUserInputField, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { ChatAgentEvent, ChatAgentEventStage, ChatAgentStep, ChatShellCommandApproval, ChatUserInputField, ChatUserInputRequest } from "@/lib/chat-agent-types"
 import { filterRawSourceTree } from "@/lib/source-filter"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-types"
 import { AgentFileActivity } from "@/components/chat/agent-file-activity"
 import { ReferenceKnowledgeGraph } from "@/components/chat/reference-knowledge-graph"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -78,7 +80,7 @@ interface ChatMessageProps {
   isLastAssistant?: boolean
   onRegenerate?: () => void
   onOpenReferencePreview?: (preview: ChatReferencePreview, relatedPreviews?: ChatReferencePreview[]) => void
-  onApproveShellCommand?: (command: string, assistantMessageId: string) => void
+  onResolveShellCommand?: (command: string, decision: ChatShellCommandApproval["decision"], instructions?: string) => void
   onSubmitUserInput?: (request: ChatUserInputRequest, answers: Record<string, unknown>) => boolean
 }
 
@@ -96,7 +98,7 @@ function ChatMessageImpl({
   isLastAssistant,
   onRegenerate,
   onOpenReferencePreview,
-  onApproveShellCommand,
+  onResolveShellCommand,
   onSubmitUserInput,
 }: ChatMessageProps) {
   const isUser = message.role === "user"
@@ -156,8 +158,9 @@ function ChatMessageImpl({
           <AgentTurnActivity
             steps={message.agentSteps ?? []}
             changes={message.agentFileChanges ?? []}
-            canApproveShellCommand={Boolean(isLastAssistant && onApproveShellCommand)}
-            onApproveShellCommand={(command) => onApproveShellCommand?.(command, message.id)}
+            shellCommandApproval={message.shellCommandApproval}
+            canResolveShellCommand={Boolean(isLastAssistant && onResolveShellCommand)}
+            onResolveShellCommand={onResolveShellCommand}
           />
         )}
         {(!isUser || message.content) && (
@@ -212,13 +215,15 @@ function ChatMessageImpl({
 function AgentTurnActivity({
   steps,
   changes,
-  canApproveShellCommand,
-  onApproveShellCommand,
+  shellCommandApproval,
+  canResolveShellCommand,
+  onResolveShellCommand,
 }: {
   steps: ChatAgentStep[]
   changes: NonNullable<DisplayMessage["agentFileChanges"]>
-  canApproveShellCommand?: boolean
-  onApproveShellCommand?: (command: string) => void
+  shellCommandApproval?: ChatShellCommandApproval
+  canResolveShellCommand?: boolean
+  onResolveShellCommand?: (command: string, decision: ChatShellCommandApproval["decision"], instructions?: string) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -233,8 +238,9 @@ function AgentTurnActivity({
       </div>
       <SavedAgentActivity
         steps={steps}
-        canApproveShellCommand={canApproveShellCommand}
-        onApproveShellCommand={onApproveShellCommand}
+        shellCommandApproval={shellCommandApproval}
+        canResolveShellCommand={canResolveShellCommand}
+        onResolveShellCommand={onResolveShellCommand}
         embedded
       />
       {changes.length > 0 && <AgentFileActivity changes={changes} embedded />}
@@ -244,16 +250,17 @@ function AgentTurnActivity({
 
 function SavedAgentActivity({
   steps,
-  canApproveShellCommand,
-  onApproveShellCommand,
+  shellCommandApproval,
+  canResolveShellCommand,
+  onResolveShellCommand,
   embedded = false,
 }: {
   steps: ChatAgentStep[]
-  canApproveShellCommand?: boolean
-  onApproveShellCommand?: (command: string) => void
+  shellCommandApproval?: ChatShellCommandApproval
+  canResolveShellCommand?: boolean
+  onResolveShellCommand?: (command: string, decision: ChatShellCommandApproval["decision"], instructions?: string) => void
   embedded?: boolean
 }) {
-  const { t } = useTranslation()
   const events = useMemo<ChatAgentEvent[]>(() => steps
     .filter((step) => step.type !== "final")
     .map((step) => ({
@@ -278,25 +285,120 @@ function SavedAgentActivity({
       output: step.output,
     })), [steps])
   const shellCommand = useMemo(() => extractShellApprovalCommand(steps), [steps])
+  const validApproval = shellCommand && shellCommandApproval?.command === shellCommand
+    ? shellCommandApproval
+    : undefined
   if (events.length === 0 && !shellCommand) return null
   return (
     <div className={embedded ? "space-y-1 border-b border-border/40 px-2 py-1.5" : "space-y-1 rounded-md border border-border/50 bg-background/50 px-2 py-1"}>
       {events.length > 0 && <AgentActivity events={events} compact />}
-      {shellCommand && canApproveShellCommand && (
-        <button
-          type="button"
-          onClick={() => onApproveShellCommand?.(shellCommand)}
-          className="flex w-full max-w-full items-start gap-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-left text-[11px] text-amber-700 transition-colors hover:bg-amber-500/20 dark:text-amber-300"
-          title={shellCommand}
-        >
-          <Terminal className="h-3 w-3 shrink-0" />
-          <span className="shrink-0">{t("chat.approveCommand")}</span>
-          <code className="whitespace-pre-wrap break-all font-mono text-[10px] text-foreground dark:text-foreground">
-            {shellCommand}
-          </code>
-        </button>
+      {shellCommand && (
+        <ShellCommandApprovalCard
+          command={shellCommand}
+          approval={validApproval}
+          canResolve={canResolveShellCommand}
+          onResolve={onResolveShellCommand}
+        />
       )}
     </div>
+  )
+}
+
+function ShellCommandApprovalCard({
+  command,
+  approval,
+  canResolve,
+  onResolve,
+}: {
+  command: string
+  approval?: ChatShellCommandApproval
+  canResolve?: boolean
+  onResolve?: (command: string, decision: ChatShellCommandApproval["decision"], instructions?: string) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [showOther, setShowOther] = useState(false)
+  const [instructions, setInstructions] = useState("")
+  const pending = !approval
+  const statusText = approval?.decision === "approved"
+    ? t("chat.shellApproval.approved")
+    : approval?.decision === "rejected"
+      ? t("chat.shellApproval.rejected")
+      : approval?.decision === "other"
+        ? t("chat.shellApproval.otherResolved")
+        : t("chat.shellApproval.pending")
+
+  const resolve = (decision: ChatShellCommandApproval["decision"], otherInstructions?: string) => {
+    if (!pending || !canResolve || !onResolve) return
+    if (decision === "other" && !otherInstructions?.trim()) return
+    onResolve(command, decision, otherInstructions?.trim())
+    setOpen(false)
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-200">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Terminal className="h-3 w-3 shrink-0" />
+          <span className="truncate">{statusText}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="shrink-0 rounded px-1.5 py-0.5 font-medium hover:bg-amber-500/15"
+        >
+          {t("chat.shellApproval.viewDetails")}
+        </button>
+      </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl gap-3" showCloseButton>
+          <DialogHeader>
+            <DialogTitle>{t("chat.shellApproval.title")}</DialogTitle>
+            <DialogDescription>{t("chat.shellApproval.description")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted-foreground">{t("chat.shellApproval.commandLabel")}</div>
+            <pre className="max-h-80 overflow-auto rounded border border-border/60 bg-muted/40 p-3 whitespace-pre-wrap break-all font-mono text-xs text-foreground">
+              <code>{command}</code>
+            </pre>
+          </div>
+          {approval?.decision === "other" && approval.instructions && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground">{t("chat.shellApproval.otherInstructions")}</div>
+              <p className="rounded border border-border/60 bg-muted/40 p-2 whitespace-pre-wrap text-xs">{approval.instructions}</p>
+            </div>
+          )}
+          {pending && canResolve && (
+            <>
+              {showOther && (
+                <textarea
+                  autoFocus
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  placeholder={t("chat.shellApproval.otherPlaceholder")}
+                  rows={3}
+                  className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 text-sm outline-none focus:border-primary"
+                />
+              )}
+              <DialogFooter>
+                {showOther ? (
+                  <>
+                    <Button variant="outline" onClick={() => setShowOther(false)}>{t("chat.shellApproval.back")}</Button>
+                    <Button disabled={!instructions.trim()} onClick={() => resolve("other", instructions)}>{t("chat.shellApproval.continueWithOther")}</Button>
+                  </>
+                ) : (
+                  <>
+                    <Button variant="outline" onClick={() => setShowOther(true)}>{t("chat.shellApproval.other")}</Button>
+                    <Button variant="destructive" onClick={() => resolve("rejected")}>{t("chat.shellApproval.reject")}</Button>
+                    <Button onClick={() => resolve("approved")}>{t("chat.shellApproval.approve")}</Button>
+                  </>
+                )}
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -317,7 +419,7 @@ export const ChatMessage = memo(ChatMessageImpl, (prev, next) =>
   && prev.isLastAssistant === next.isLastAssistant
   && prev.onRegenerate === next.onRegenerate
   && prev.onOpenReferencePreview === next.onOpenReferencePreview
-  && prev.onApproveShellCommand === next.onApproveShellCommand
+  && prev.onResolveShellCommand === next.onResolveShellCommand
   && prev.onSubmitUserInput === next.onSubmitUserInput
 )
 

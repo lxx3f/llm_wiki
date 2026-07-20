@@ -1243,7 +1243,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       },
     ]
     const resumeMessage = [
-      "Continue the same Agent task from the preserved tool progress. The user approved the pending shell command; execute only that approved command first, then continue from its result. Do not restart completed setup, file reads, or workspace writes unless the command result proves they are invalid.",
+      "Continue the same Agent task from the preserved tool progress. The user approved the pending shell command. Execute only that exact approved command first, then continue from its result. Do not restart completed setup, file reads, or workspace writes unless the command result proves they are invalid.",
     ].join("\n")
     setApprovingShellMessageId(assistantMessageId)
     // Approval is a continuation of a turn that has already stopped at a
@@ -1273,6 +1273,91 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       setApprovingShellMessageId(null)
     }
   }, [approvingShellMessageId, handleSend, setStreaming])
+
+  const recordShellCommandApproval = useCallback((messageId: string, command: string, decision: "approved" | "rejected" | "other", instructions?: string) => {
+    const normalizedCommand = command.trim()
+    let recorded = false
+    useChatStore.setState((state) => ({
+      messages: state.messages.map((message) => {
+        if (message.id !== messageId || message.conversationId !== activeConversationId || message.role !== "assistant") return message
+        const pendingCommand = message.agentSteps?.find((step) =>
+          step.tool === "shell_exec"
+          && step.status === "skipped"
+          && step.message?.trim().startsWith("approval required:")
+        )?.message?.trim().slice("approval required:".length).trim()
+        if (pendingCommand !== normalizedCommand || message.shellCommandApproval) return message
+        recorded = true
+        return {
+          ...message,
+          shellCommandApproval: {
+            command: normalizedCommand,
+            decision,
+            decidedAt: Date.now(),
+            ...(instructions ? { instructions } : {}),
+          },
+        }
+      }),
+    }))
+    return recorded
+  }, [activeConversationId])
+
+  const handleResolveShellCommand = useCallback(async (command: string, decision: "approved" | "rejected" | "other", instructions: string | undefined, assistantMessageId: string) => {
+    if (!command.trim() || approvingShellMessageId || (decision === "other" && !instructions?.trim())) return
+    if (!recordShellCommandApproval(assistantMessageId, command, decision, instructions)) return
+    if (decision === "rejected") return
+    if (decision === "approved") {
+      await handleApproveShellCommand(command, assistantMessageId)
+      return
+    }
+
+    const active = useChatStore.getState().getActiveMessages()
+    const assistantIndex = active.findIndex((message) => message.id === assistantMessageId)
+    const priorUser = assistantIndex > 0
+      ? [...active.slice(0, assistantIndex)].reverse().find((message) => message.role === "user")
+      : undefined
+    const assistantMessage = assistantIndex > 0 ? active[assistantIndex] : undefined
+    if (!priorUser || !assistantMessage || !instructions?.trim()) return
+    const resumeHistory = [
+      ...compactChatHistoryForResume(active.slice(0, assistantIndex), maxHistoryMessages),
+      {
+        role: "assistant" as const,
+        content: [
+          "The previous Agent turn stopped at a shell approval boundary.",
+          "The user did not approve the pending shell command.",
+          "Preserved tool progress before the decision:",
+          summarizeAgentStepsForResume(assistantMessage.agentSteps),
+          "",
+          assistantMessage.content,
+        ].join("\n"),
+      },
+    ]
+    setApprovingShellMessageId(assistantMessageId)
+    abortRef.current?.abort()
+    abortRef.current = null
+    activeRunSessionIdRef.current = null
+    activeRunIdRef.current = null
+    setStreaming(false)
+    try {
+      await handleSend([
+        "Continue the same Agent task without executing the previously rejected shell command.",
+        `User instructions: ${instructions.trim()}`,
+        "Use a different approach. If shell access is still necessary, request approval for a new exact command.",
+      ].join("\n"), priorUser.images ?? [], {
+        useWebSearch: useChatStore.getState().useWebSearch,
+        useAnyTxtSearch: useChatStore.getState().useAnyTxtSearch,
+        agentMode: useChatStore.getState().agentMode,
+        retrievalMode: useChatStore.getState().retrievalMode,
+        skills: useChatStore.getState().selectedSkills,
+        contextFiles: useChatStore.getState().selectedContextFiles,
+        skillMode: useChatStore.getState().selectedSkills.length > 0 ? "explicit" : "auto",
+        allowUnlimitedIterations: useWikiStore.getState().generalConfig.unlimitedAgentIterations,
+        suppressUserMessage: true,
+        historyOverride: resumeHistory,
+      })
+    } finally {
+      setApprovingShellMessageId(null)
+    }
+  }, [approvingShellMessageId, handleApproveShellCommand, handleSend, maxHistoryMessages, recordShellCommandApproval, setStreaming])
 
   const handleSubmitUserInput = useCallback((request: ChatUserInputRequest, answers: Record<string, unknown>) => {
     if (activeStreaming) return false
@@ -1488,9 +1573,9 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                         isLastAssistant={isLastAssistant && !activeStreaming}
                         onRegenerate={isLastAssistant ? handleRegenerate : undefined}
                         onOpenReferencePreview={handleOpenReferencePreview}
-                        onApproveShellCommand={
+                        onResolveShellCommand={
                           isLastAssistant && approvingShellMessageId !== msg.id
-                            ? handleApproveShellCommand
+                            ? (command, decision, instructions) => void handleResolveShellCommand(command, decision, instructions, msg.id)
                             : undefined
                         }
                         onSubmitUserInput={isLastAssistant ? handleSubmitUserInput : undefined}

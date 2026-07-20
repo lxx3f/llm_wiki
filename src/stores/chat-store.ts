@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import type { ChatMessage, ContentBlock } from "@/lib/llm-client"
 import i18n from "@/i18n"
-import type { ChatAgentFileChange, ChatAgentMode, ChatPendingWikiWrite, ChatAgentStep, ChatRetrievalMode, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { ChatAgentFileChange, ChatAgentMode, ChatPendingWikiWrite, ChatAgentStep, ChatRetrievalMode, ChatShellCommandApproval, ChatUserInputRequest } from "@/lib/chat-agent-types"
 import type { WikiWriteMode } from "@/lib/wiki-page-context"
 
 /**
@@ -50,6 +50,7 @@ export interface DisplayMessage {
   images?: MessageImage[]  // images attached to a user message (vision input)
   contextFiles?: string[]  // absolute project files explicitly attached to this user turn
   pendingWikiWrite?: ChatPendingWikiWrite  // staged Wiki write requiring user confirmation
+  shellCommandApproval?: ChatShellCommandApproval  // resolved Shell authorization boundary for this Agent turn
 }
 
 interface ChatState {

@@ -469,9 +469,14 @@ Phase 7: MCP 只读 + 键盘快捷键 + i18n
 
 不含 `changelog.ts` 顶部版本号条目（CLAUDE.md 主应用发版纪律，按 Phase 1 开始时一并 bump）。
 
-## 8. 开放问题
+## 8. 已确定的默认决策（不留到实现期）
 
-- [ ] "5 分钟无活动自动 resolve" 的 timer 是放在前端 `chat-store` 还是后端 Agent？倾向前端（轻、不污染 Rust state）
-- [ ] `range: { start, end }` 偏移基准：UTF-16 code unit 还是 UTF-8 byte？倾向 **UTF-16 code unit**（与 JS `String.prototype.slice` 一致，boundary 测试覆盖）
-- [ ] annotation 抽屉宽度是否可拖拽？先固定 360px，与现有右栏默认宽一致
-- [ ] flatten 后是否在主 conversation 的新消息上标注"来自 annotation"？倾向加 `flattenedFromAnnotation: annotationId` 标记，UI 可选择性渲染角标
+| 问题 | 默认决策 | 备注 |
+|---|---|---|
+| 自动 resolve timer 放哪 | 前端 `chat-store` 用 `setTimeout`；5 min 无活动 → Resolved | 后端不存 ephemeral timer，避免分布式一致性 |
+| `range` 偏移基准 | **UTF-16 code unit**（与 `String.prototype.slice` 一致） | Rust 端 boundary 处显式转换；边界用例进 `selection-utils` 单测 |
+| 抽屉宽度 | 固定 360px；不可拖拽 | 与现有右栏默认宽一致；后续如需可拖拽再单独设计 |
+| flatten 后主 conversation 新消息角标 | 加 `flattenedFromAnnotation?: string` 字段；UI 默认隐藏角标，用户可开 Settings → Chat → "显示来自旁注的消息角标" | 默认隐藏避免视觉噪音 |
+| 多选区（Ctrl/⌘ 多段） | **不支持**；`selection-utils` 只接受单一连续 range，多段选区在右键时降级为整段第一个 range | 避免 model 上下文混乱 |
+| 触屏 / 长按 | **不在第一版**；desktop-only，触屏走"按段 ? 按钮"入口 | 后续按需补 |
+| 同一 snippet 多 annotation | **支持**；同一 snippet 多次右键可创建多个独立 annotation（每次生成新 id） | 用户可对同一段做不同角度追问 |

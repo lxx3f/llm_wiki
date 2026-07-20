@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::commands::schema::SchemaProposal;
+use crate::agent::memory::MemoryProposal;
+
 use super::types::{AgentReference, AgentUserInputRequest, PendingWikiWrite};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -38,6 +41,12 @@ pub enum AgentEvent {
     },
     UserInputRequired {
         request: AgentUserInputRequest,
+    },
+    SchemaProposalConfirmationRequired {
+        proposal: SchemaProposal,
+    },
+    MemoryProposalConfirmationRequired {
+        proposal: MemoryProposal,
     },
     WikiWriteConfirmationRequired {
         #[serde(rename = "pendingWrite")]
@@ -106,6 +115,35 @@ mod tests {
         assert_eq!(value["type"], "fileChanged");
         assert_eq!(value["existedBefore"], true);
         assert_eq!(value["previousContent"], "before");
+    }
+
+    #[test]
+    fn schema_proposal_confirmation_event_serializes_with_camelcase_tag() {
+        let proposal = crate::commands::schema::SchemaProposal {
+            id: "proposal-1".to_string(),
+            project_id: "project-1".to_string(),
+            session_id: "session-1".to_string(),
+            base_schema_hash: "sha256:before".to_string(),
+            proposed_schema: "# Schema".to_string(),
+            compiled: crate::commands::schema::CompiledSchema {
+                schema_version: 1,
+                content_hash: "sha256:after".to_string(),
+                type_dirs: Default::default(),
+                diagnostics: Vec::new(),
+            },
+            impact: crate::commands::schema::SchemaImpactReport {
+                schema_hash: "sha256:after".to_string(),
+                pages_scanned: 0,
+                affected_pages: Vec::new(),
+                truncated: false,
+            },
+            required_directories: Vec::new(),
+            created_at: 0,
+            status: "pending".to_string(),
+        };
+        let value = serde_json::to_value(AgentEvent::SchemaProposalConfirmationRequired { proposal }).unwrap();
+        assert_eq!(value["type"], "schemaProposalConfirmationRequired");
+        assert_eq!(value["proposal"]["id"], "proposal-1");
     }
 
     #[test]

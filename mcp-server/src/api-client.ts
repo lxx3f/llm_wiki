@@ -77,6 +77,90 @@ export interface ApiChatResponse {
   usage?: ApiChatUsage
 }
 
+export interface ApiSchema {
+  schemaVersion: number
+  contentHash: string
+  typeDirs: Record<string, string>
+  diagnostics: Array<{ severity: string; code: string; message: string; line?: number }>
+}
+
+export interface ApiSchemaImpactReport {
+  schemaHash: string
+  pagesScanned: number
+  affectedPages: Array<{ path: string; code: string; message: string; expectedDir?: string; expectedType?: string }>
+  truncated: boolean
+}
+
+export interface ApiSchemaProposal {
+  id: string
+  baseSchemaHash: string
+  proposedSchema: string
+  compiled: ApiSchema
+  impact: ApiSchemaImpactReport
+  requiredDirectories: string[]
+  createdAt: number
+  status: string
+}
+
+export interface ApiSchemaApplyResult {
+  schemaHash: string
+  schemaVersion: number
+  impact: ApiSchemaImpactReport
+  createdDirectories: string[]
+}
+
+export interface ApiMemorySearchHit {
+  memory: {
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+    confidence: "user_confirmed" | "evidence_backed" | "agent_suggested"
+  }
+  score: number
+}
+
+export interface ApiMemoryListResponse {
+  active: Array<{
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+    confidence: "user_confirmed" | "evidence_backed" | "agent_suggested"
+  }>
+  proposals: Array<{
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+  }>
+  archive: Array<unknown>
+}
+
+export interface ApiMemoryImportCandidate {
+  id: string
+  kind: string
+  scope: "project" | "session"
+  title: string
+  content: string
+  confidence: string
+  sourceLabel: string
+  referencePaths: string[]
+  sensitive: boolean
+  duplicateOf?: string | null
+}
+
+export interface ApiMemoryImportBatch {
+  id: string
+  sourceFile: string
+  sourceFormat: string
+  candidates: ApiMemoryImportCandidate[]
+  createdAt: number
+}
+
 export interface ApiGraphNode {
   id: string
   label: string
@@ -277,6 +361,109 @@ export class LlmWikiApiClient {
     }
   }
 
+  async schema(projectId = "current"): Promise<ApiSchema> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema`)
+    return parseSchema(json.schema)
+  }
+
+  async memorySearch(projectId = "current", query = "", options: { kind?: string; limit?: number } = {}): Promise<ApiMemorySearchHit[]> {
+    const params = new URLSearchParams({ query })
+    if (options.kind) params.set("kind", options.kind)
+    if (options.limit !== undefined) params.set("limit", String(options.limit))
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/search?${params.toString()}`)
+    return Array.isArray(json.hits) ? json.hits.map(parseMemorySearchHit) : []
+  }
+
+  async memoryList(projectId = "current"): Promise<ApiMemoryListResponse> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/list`)
+    return {
+      active: Array.isArray(json.active) ? json.active.map(parseMemoryEntry) : [],
+      proposals: Array.isArray(json.proposals) ? json.proposals.map(parseMemoryEntry) : [],
+      archive: Array.isArray(json.archive) ? json.archive : [],
+    }
+  }
+
+  async memoryAcceptProposal(projectId: string, memoryId: string): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/proposals/${encodeURIComponent(memoryId)}/accept`, {
+      method: "POST",
+    })
+  }
+
+  async memoryRejectProposal(projectId: string, memoryId: string, reason = "rejected via MCP"): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/proposals/${encodeURIComponent(memoryId)}/reject`, {
+      method: "POST",
+      body: { reason },
+    })
+  }
+
+  async memoryArchive(projectId: string, memoryId: string, reason = "archived via MCP"): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}/archive`, {
+      method: "POST",
+      body: { reason },
+    })
+  }
+
+  async memoryRedact(projectId: string, memoryId: string, reason = "redacted via MCP"): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}/redact`, {
+      method: "POST",
+      body: { reason },
+    })
+  }
+
+  async memoryImportParse(projectId: string, sourceFormat: string, sourceLabel: string, raw: string): Promise<ApiMemoryImportBatch> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports`, {
+      method: "POST",
+      body: { sourceFormat, sourceLabel, raw },
+    })
+    return parseMemoryImportBatch(json.batch)
+  }
+
+  async memoryImportAccept(projectId: string, batchId: string, candidateId: string, sessionId: string): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports/${encodeURIComponent(batchId)}/accept`, {
+      method: "POST",
+      body: { sessionId, candidateId },
+    })
+  }
+
+  async memoryImportList(projectId = "current"): Promise<ApiMemoryImportBatch[]> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports`)
+    return Array.isArray(json.batches) ? json.batches.map(parseMemoryImportBatch) : []
+  }
+
+  async memoryImportDiscard(projectId: string, batchId: string): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports/${encodeURIComponent(batchId)}`, {
+      method: "DELETE",
+    })
+  }
+
+  async schemaAudit(projectId = "current"): Promise<ApiSchemaImpactReport> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/audit`)
+    return parseSchemaImpact(json.audit)
+  }
+
+  async createSchemaProposal(projectId: string, sessionId: string, proposedSchema: string): Promise<ApiSchemaProposal> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/proposals`, {
+      method: "POST",
+      body: { sessionId, proposedSchema },
+    })
+    return parseSchemaProposal(json.proposal)
+  }
+
+  async applySchemaProposal(projectId: string, proposalId: string, sessionId: string, expectedSchemaHash: string): Promise<ApiSchemaApplyResult> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/proposals/${encodeURIComponent(proposalId)}/apply`, {
+      method: "POST",
+      body: { sessionId, expectedSchemaHash },
+    })
+    return parseSchemaApplyResult(json.result)
+  }
+
+  async rejectSchemaProposal(projectId: string, proposalId: string, sessionId: string): Promise<void> {
+    await this.request(`/projects/${encodeURIComponent(projectId)}/schema/proposals/${encodeURIComponent(proposalId)}/reject`, {
+      method: "POST",
+      body: { sessionId },
+    })
+  }
+
   async graph(projectId = "current", options: { q?: string; nodeType?: string; limit?: number } = {}): Promise<{ nodes: ApiGraphNode[]; edges: ApiGraphEdge[] }> {
     const params = new URLSearchParams()
     if (options.q) params.set("q", options.q)
@@ -296,7 +483,7 @@ export class LlmWikiApiClient {
     })
   }
 
-  private async request(path: string, options: { method?: "GET" | "POST"; body?: unknown; auth?: boolean } = {}): Promise<Record<string, unknown>> {
+  private async request(path: string, options: { method?: "DELETE" | "GET" | "POST"; body?: unknown; auth?: boolean } = {}): Promise<Record<string, unknown>> {
     const url = `${this.baseUrl}${apiPath(path)}`
     const headers: Record<string, string> = { Accept: "application/json" }
     if (options.auth !== false && this.token?.trim()) {
@@ -328,6 +515,98 @@ export class LlmWikiApiClient {
       throw new Error(`LLM Wiki API ${response.status}: ${message}`)
     }
     return json
+  }
+}
+
+function parseSchema(value: unknown): ApiSchema {
+  const obj = requireObject(value, "schema")
+  const typeDirs = obj.typeDirs && typeof obj.typeDirs === "object" && !Array.isArray(obj.typeDirs)
+    ? Object.fromEntries(Object.entries(obj.typeDirs).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+    : {}
+  return {
+    schemaVersion: numberOrUndefined(obj.schemaVersion) ?? 1,
+    contentHash: String(obj.contentHash ?? ""),
+    typeDirs,
+    diagnostics: Array.isArray(obj.diagnostics) ? obj.diagnostics.map((item) => {
+      const diagnostic = requireObject(item, "schema diagnostic")
+      return { severity: String(diagnostic.severity ?? "warning"), code: String(diagnostic.code ?? "unknown"), message: String(diagnostic.message ?? ""), ...(numberOrUndefined(diagnostic.line) !== undefined ? { line: numberOrUndefined(diagnostic.line) } : {}) }
+    }) : [],
+  }
+}
+
+function parseSchemaImpact(value: unknown): ApiSchemaImpactReport {
+  const obj = requireObject(value, "schema audit")
+  return {
+    schemaHash: String(obj.schemaHash ?? ""),
+    pagesScanned: numberOrUndefined(obj.pagesScanned) ?? 0,
+    affectedPages: Array.isArray(obj.affectedPages) ? obj.affectedPages.map((item) => {
+      const page = requireObject(item, "schema affected page")
+      return { path: String(page.path ?? ""), code: String(page.code ?? "unknown"), message: String(page.message ?? ""), ...(typeof page.expectedDir === "string" ? { expectedDir: page.expectedDir } : {}), ...(typeof page.expectedType === "string" ? { expectedType: page.expectedType } : {}) }
+    }) : [],
+    truncated: obj.truncated === true,
+  }
+}
+
+function parseSchemaProposal(value: unknown): ApiSchemaProposal {
+  const obj = requireObject(value, "schema proposal")
+  return {
+    id: String(obj.id ?? ""), baseSchemaHash: String(obj.baseSchemaHash ?? ""), proposedSchema: String(obj.proposedSchema ?? ""), compiled: parseSchema(obj.compiled), impact: parseSchemaImpact(obj.impact), requiredDirectories: Array.isArray(obj.requiredDirectories) ? obj.requiredDirectories.filter((item): item is string => typeof item === "string") : [], createdAt: numberOrUndefined(obj.createdAt) ?? 0, status: String(obj.status ?? "pending"),
+  }
+}
+
+function parseSchemaApplyResult(value: unknown): ApiSchemaApplyResult {
+  const obj = requireObject(value, "schema apply result")
+  return { schemaHash: String(obj.schemaHash ?? ""), schemaVersion: numberOrUndefined(obj.schemaVersion) ?? 1, impact: parseSchemaImpact(obj.impact), createdDirectories: Array.isArray(obj.createdDirectories) ? obj.createdDirectories.filter((item): item is string => typeof item === "string") : [] }
+}
+
+function parseMemoryEntry(value: unknown): ApiMemoryListResponse["active"][number] {
+  const obj = requireObject(value, "memory entry")
+  return {
+    id: String(obj.id ?? ""),
+    kind: String(obj.kind ?? "user_preference"),
+    scope: (obj.scope === "session" ? "session" : "project") as "project" | "session",
+    title: String(obj.title ?? ""),
+    content: String(obj.content ?? ""),
+    confidence: normalizeConfidence(obj.confidence),
+  }
+}
+
+function normalizeConfidence(value: unknown): "user_confirmed" | "evidence_backed" | "agent_suggested" {
+  if (value === "evidence_backed") return "evidence_backed"
+  if (value === "agent_suggested") return "agent_suggested"
+  return "user_confirmed"
+}
+
+function parseMemorySearchHit(value: unknown): ApiMemorySearchHit {
+  const entry = parseMemoryEntry(value)
+  const obj = requireObject(value, "memory hit")
+  return { memory: entry, score: numberOrUndefined(obj.score) ?? 0 }
+}
+
+function parseMemoryImportCandidate(value: unknown): ApiMemoryImportCandidate {
+  const obj = requireObject(value, "memory import candidate")
+  return {
+    id: String(obj.id ?? ""),
+    kind: String(obj.kind ?? "user_preference"),
+    scope: (obj.scope === "session" ? "session" : "project") as "project" | "session",
+    title: String(obj.title ?? ""),
+    content: String(obj.content ?? ""),
+    confidence: String(obj.confidence ?? "user_confirmed"),
+    sourceLabel: String(obj.sourceLabel ?? ""),
+    referencePaths: Array.isArray(obj.referencePaths) ? obj.referencePaths.filter((item): item is string => typeof item === "string") : [],
+    sensitive: obj.sensitive === true,
+    duplicateOf: typeof obj.duplicateOf === "string" ? obj.duplicateOf : null,
+  }
+}
+
+function parseMemoryImportBatch(value: unknown): ApiMemoryImportBatch {
+  const obj = requireObject(value, "memory import batch")
+  return {
+    id: String(obj.id ?? ""),
+    sourceFile: String(obj.sourceFile ?? ""),
+    sourceFormat: String(obj.sourceFormat ?? ""),
+    createdAt: numberOrUndefined(obj.createdAt) ?? 0,
+    candidates: Array.isArray(obj.candidates) ? obj.candidates.map(parseMemoryImportCandidate) : [],
   }
 }
 

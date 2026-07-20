@@ -93,6 +93,8 @@ pub struct BuiltinToolRegistry;
 #[derive(Clone)]
 pub struct ToolContext<'a> {
     pub project_path: &'a str,
+    pub project_id: &'a str,
+    pub session_id: Option<String>,
     pub embedding_config: Option<SearchEmbeddingConfig>,
     pub web_search_config: Option<WebSearchConfig>,
     pub anytxt_config: Option<AnyTxtConfig>,
@@ -111,6 +113,150 @@ impl ToolRegistry for BuiltinToolRegistry {
     ) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'a>> {
         Box::pin(async move {
             match name {
+                "memory.search" => {
+                    let query = input
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or("")
+                        .to_string();
+                    let kind = match input.get("kind").and_then(Value::as_str) {
+                        Some("user_preference") => Some(crate::agent::memory::MemoryKind::UserPreference),
+                        Some("project_convention") => Some(crate::agent::memory::MemoryKind::ProjectConvention),
+                        Some("confirmed_fact") => Some(crate::agent::memory::MemoryKind::ConfirmedFact),
+                        Some("decision") => Some(crate::agent::memory::MemoryKind::Decision),
+                        Some("open_question") => Some(crate::agent::memory::MemoryKind::OpenQuestion),
+                        Some("schema_note") => Some(crate::agent::memory::MemoryKind::SchemaNote),
+                        Some(_) => return Err("memory.search received an unknown kind".to_string()),
+                        None => None,
+                    };
+                    let limit = input
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as usize)
+                        .unwrap_or(8);
+                    let hits = crate::agent::memory::ProjectMemoryStore::search(
+                        context.project_path,
+                        context.project_id,
+                        context.session_id.as_deref(),
+                        &query,
+                        kind,
+                        limit,
+                    )?;
+                    serde_json::to_value(hits)
+                        .map_err(|err| format!("Failed to serialize memory.search result: {err}"))
+                }
+                "memory.propose" => {
+                    let session_id = context.session_id.as_deref().ok_or_else(|| {
+                        "memory.propose requires an active session id".to_string()
+                    })?;
+                    let kind = match input.get("kind").and_then(Value::as_str) {
+                        Some("user_preference") => crate::agent::memory::MemoryKind::UserPreference,
+                        Some("project_convention") => crate::agent::memory::MemoryKind::ProjectConvention,
+                        Some("confirmed_fact") => crate::agent::memory::MemoryKind::ConfirmedFact,
+                        Some("decision") => crate::agent::memory::MemoryKind::Decision,
+                        Some("open_question") => crate::agent::memory::MemoryKind::OpenQuestion,
+                        Some("schema_note") => crate::agent::memory::MemoryKind::SchemaNote,
+                        _ => return Err("memory.propose requires a valid kind".to_string()),
+                    };
+                    let scope = match input.get("scope").and_then(Value::as_str) {
+                        Some("project") => crate::agent::memory::MemoryScope::Project,
+                        Some("session") => crate::agent::memory::MemoryScope::Session,
+                        _ => return Err("memory.propose requires scope=project or scope=session".to_string()),
+                    };
+                    let title = input
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "memory.propose requires title".to_string())?;
+                    let content = input
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "memory.propose requires content".to_string())?;
+                    let reference_paths = input
+                        .get("referencePaths")
+                        .and_then(Value::as_array)
+                        .map(|items| items.iter().filter_map(|value| value.as_str().map(|s| s.to_string())).collect());
+                    let confidence = match input.get("confidence").and_then(Value::as_str) {
+                        Some("user_confirmed") => crate::agent::memory::MemoryConfidence::UserConfirmed,
+                        Some("evidence_backed") => crate::agent::memory::MemoryConfidence::EvidenceBacked,
+                        _ => crate::agent::memory::MemoryConfidence::AgentSuggested,
+                    };
+                    let reason = input
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Agent proposed based on current task");
+                    let proposal = crate::agent::memory::ProjectMemoryStore::create_proposal(
+                        context.project_path,
+                        context.project_id,
+                        Some(session_id),
+                        kind,
+                        scope,
+                        title,
+                        content,
+                        confidence,
+                        reference_paths,
+                        reason,
+                    )?;
+                    serde_json::to_value(proposal)
+                        .map_err(|err| format!("Failed to serialize memory.propose result: {err}"))
+                }
+                "memory.list" => {
+                    let scope = input.get("scope").and_then(Value::as_str);
+                    let project_id = input
+                        .get("projectId")
+                        .and_then(Value::as_str)
+                        .unwrap_or(context.project_id);
+                    let active = crate::agent::memory::ProjectMemoryStore::list_active(
+                        context.project_path,
+                        project_id,
+                        context.session_id.as_deref(),
+                    )?;
+                    let proposals = crate::agent::memory::ProjectMemoryStore::proposals(context.project_path, project_id)?;
+                    Ok(serde_json::json!({
+                        "active": active
+                            .into_iter()
+                            .filter(|memory| match scope {
+                                Some("project") => matches!(memory.scope, crate::agent::memory::MemoryScope::Project),
+                                Some("session") => matches!(memory.scope, crate::agent::memory::MemoryScope::Session),
+                                _ => true,
+                            })
+                            .collect::<Vec<_>>(),
+                        "proposals": proposals,
+                    }))
+                }
+                "schema.inspect" => serde_json::to_value(
+                    crate::commands::schema::get_compiled_schema(context.project_path)?,
+                )
+                .map_err(|err| format!("Failed to serialize schema.inspect result: {err}")),
+                "schema.validate" => {
+                    let schema = crate::commands::schema::get_compiled_schema(context.project_path)?;
+                    serde_json::to_value(crate::commands::schema::audit_project_schema_for_api(
+                        context.project_path,
+                        &schema,
+                    )?)
+                    .map_err(|err| format!("Failed to serialize schema.validate result: {err}"))
+                }
+                "schema.propose_change" => {
+                    let session_id = context
+                        .session_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "schema.propose_change requires an active session".to_string())?;
+                    let proposed_schema = input
+                        .get("proposedSchema")
+                        .or_else(|| input.get("proposed_schema"))
+                        .or_else(|| input.get("content"))
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "schema.propose_change requires proposedSchema".to_string())?;
+                    serde_json::to_value(crate::commands::schema::create_schema_proposal(
+                        context.project_path,
+                        context.project_id,
+                        session_id,
+                        proposed_schema.to_string(),
+                    )?)
+                    .map_err(|err| format!("Failed to serialize schema.propose_change result: {err}"))
+                }
                 "wiki.write_page" => {
                     let path = input
                         .get("path")
@@ -659,6 +805,72 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                     }
                 },
                 "required": ["query"]
+            })),
+        },
+        ToolSpec {
+            name: "memory.search".to_string(),
+            description: "Search project-scoped memory entries (preferences, conventions, confirmed facts, decisions, open questions, schema notes). Read-only. The returned entries are already user-confirmed and safe to cite.".to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Optional query; if empty, returns highest-confidence entries." },
+                    "kind": { "type": "string", "enum": ["user_preference", "project_convention", "confirmed_fact", "decision", "open_question", "schema_note"] },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 32 }
+                },
+                "additionalProperties": false
+            })),
+        },
+        ToolSpec {
+            name: "memory.propose".to_string(),
+            description: "Create a pending memory candidate. Never claim to save anything until the user explicitly accepts the proposal in the Memory confirmation UI. Use only when the user clearly states a stable preference, confirms a project decision, asks you to remember something, or a statement is backed by a confirmed wiki/reference.".to_string(),
+            effects: vec![ToolEffect::Write],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["user_preference", "project_convention", "confirmed_fact", "decision", "open_question", "schema_note"] },
+                    "scope": { "type": "string", "enum": ["project", "session"], "description": "project is cross-session; session lives only for the current Agent session." },
+                    "title": { "type": "string" },
+                    "content": { "type": "string" },
+                    "confidence": { "type": "string", "enum": ["user_confirmed", "evidence_backed", "agent_suggested"] },
+                    "reason": { "type": "string" },
+                    "referencePaths": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["kind", "scope", "title", "content"]
+            })),
+        },
+        ToolSpec {
+            name: "memory.list".to_string(),
+            description: "List active and pending memory entries for the current project. Read-only; useful for management UIs and for surfacing proposals that still need user confirmation.".to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string", "enum": ["project", "session"] }
+                },
+                "additionalProperties": false
+            })),
+        },
+        ToolSpec {
+            name: "schema.inspect".to_string(),
+            description: "Read the compiled project schema version, Page Types routing, and diagnostics. This is read-only. Use it before proposing a schema change.".to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: None,
+        },
+        ToolSpec {
+            name: "schema.validate".to_string(),
+            description: "Audit existing wiki pages against the current project schema. This is read-only: it reports affected paths and never migrates pages.".to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: None,
+        },
+        ToolSpec {
+            name: "schema.propose_change".to_string(),
+            description: "Create a pending, user-reviewable proposal for replacing the complete root schema.md. Never claims to apply the change; the user must explicitly approve it through the Schema proposal UI. Use only when the user asks to evolve the project schema or confirms a convention should be formalized.".to_string(),
+            effects: vec![ToolEffect::Write],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "proposedSchema": { "type": "string", "description": "Complete proposed schema.md Markdown content." } },
+                "required": ["proposedSchema"]
             })),
         },
         ToolSpec {
@@ -3454,6 +3666,8 @@ mod tests {
         let registry = BuiltinToolRegistry;
         let context = ToolContext {
             project_path: root.to_str().unwrap(),
+            project_id: "test-project",
+            session_id: Some("test-session".to_string()),
             embedding_config: None,
             web_search_config: None,
             anytxt_config: None,
@@ -3484,6 +3698,8 @@ mod tests {
         let registry = BuiltinToolRegistry;
         let context = ToolContext {
             project_path: root.to_str().unwrap(),
+            project_id: "test-project",
+            session_id: Some("test-session".to_string()),
             embedding_config: None,
             web_search_config: None,
             anytxt_config: None,

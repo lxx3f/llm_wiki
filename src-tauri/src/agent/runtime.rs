@@ -544,7 +544,7 @@ impl AgentRuntime {
                 });
                 emit_event(&mut events, &event_sink, AgentEvent::tool_end("wiki.write_page", Some("confirmation required".to_string())));
             } else {
-            let tool_context = self.tool_context();
+            let tool_context = self.tool_context(None);
             match execute_tool_with_cancellation(
                 tool_registry.execute(
                     "wiki.write_page",
@@ -695,7 +695,7 @@ impl AgentRuntime {
                                 "command": command,
                                 "timeoutSeconds": timeout_seconds,
                             }),
-                            self.tool_context(),
+                            self.tool_context(None),
                         ),
                         cancellation.as_ref(),
                     )
@@ -808,7 +808,7 @@ impl AgentRuntime {
                         "topK": top_k,
                         "includeContent": request.include_content.unwrap_or(false)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -959,7 +959,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1048,7 +1048,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1137,7 +1137,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1227,7 +1227,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1592,22 +1592,37 @@ impl AgentRuntime {
         for iteration in 0..max_iterations {
             check_cancel(cancellation)?;
             let must_finalize = force_final_next || retrieval_steps >= retrieval_budget;
+            let memory_hits = crate::agent::memory::ProjectMemoryStore::search(
+                &self.project_path,
+                &self.project_id,
+                Some(session_id.as_str()),
+                message,
+                None,
+                8,
+            )
+            .unwrap_or_default();
+            let memory_block = crate::agent::memory::build_injection(
+                &memory_hits.into_iter().map(|hit| hit.memory).collect::<Vec<_>>(),
+                2_000,
+            );
             let built_context = fit_context_to_model(
-                build_agent_context(AgentContextInput {
-                    query: message,
-                    project: &project_context,
-                    router: &router,
-                    history: &request.history,
-                    skills: &skills,
-                    skill_mode: request.skill_mode,
-                    references: &references,
-                    // Loop observations are appended below in the loop-specific
-                    // user block. Passing them through the generic retrieval
-                    // summary as well would duplicate large tool outputs on
-                    // every iteration.
-                    retrieval_summary: "",
-                    explicit_files: &explicit_files,
-                }),
+                {
+                    let mut ctx = build_agent_context(AgentContextInput {
+                        query: message,
+                        project: &project_context,
+                        router: &router,
+                        history: &request.history,
+                        skills: &skills,
+                        skill_mode: request.skill_mode,
+                        references: &references,
+                        retrieval_summary: "",
+                        explicit_files: &explicit_files,
+                    });
+                    if !memory_block.is_empty() {
+                        ctx.system.push_str(&memory_block);
+                    }
+                    ctx
+                },
                 self.llm_config.as_ref(),
             );
             let (system, user) = if must_finalize {
@@ -2413,7 +2428,7 @@ impl AgentRuntime {
         }
 
         let result = execute_tool_with_cancellation(
-            tool_registry.execute(tool, input, self.tool_context()),
+            tool_registry.execute(tool, input, self.tool_context(Some(session_id))),
             cancellation,
         )
         .await;
@@ -2512,6 +2527,42 @@ impl AgentRuntime {
                     "path": path,
                 }))
             }
+            "schema.inspect" | "schema.validate" => Ok(serde_json::json!({})),
+            "schema.propose_change" => {
+                let content = action
+                    .content
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| "schema.propose_change requires the complete proposed schema in content".to_string())?;
+                Ok(serde_json::json!({ "proposedSchema": content }))
+            }
+            "memory.search" => {
+                let query = action
+                    .query
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_string();
+                Ok(serde_json::json!({
+                    "query": query,
+                    "kind": action.fields.as_ref().and_then(|v| v.get("kind")).and_then(|v| v.as_str()),
+                    "limit": action.top_k.unwrap_or(8),
+                }))
+            }
+            "memory.propose" => {
+                let fields = action.fields.clone().unwrap_or(Value::Null);
+                Ok(serde_json::json!({
+                    "kind": fields.get("kind").cloned().unwrap_or(Value::Null),
+                    "scope": fields.get("scope").cloned().unwrap_or(Value::Null),
+                    "title": fields.get("title").cloned().unwrap_or(Value::Null),
+                    "content": fields.get("content").cloned().unwrap_or(Value::Null),
+                    "confidence": fields.get("confidence").cloned().unwrap_or(Value::Null),
+                    "reason": fields.get("reason").cloned().unwrap_or(Value::Null),
+                    "referencePaths": fields.get("referencePaths").cloned().unwrap_or(Value::Null),
+                }))
+            }
+            "memory.list" => Ok(serde_json::json!({
+                "scope": action.fields.as_ref().and_then(|v| v.get("scope")).and_then(|v| v.as_str())
+            })),
             "wiki.write_page" => {
                 let path = action
                     .path
@@ -2591,6 +2642,120 @@ impl AgentRuntime {
         event_sink: &Option<AgentEventSink>,
     ) -> Result<String, String> {
         match tool {
+            "schema.propose_change" => {
+                let proposal: crate::commands::schema::SchemaProposal = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid schema.propose_change result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::SchemaProposalConfirmationRequired {
+                        proposal: proposal.clone(),
+                    },
+                );
+                Ok(format!(
+                    "Created pending schema proposal {} (base={}, version={}, affectedPages={}). Wait for the user's explicit approval; do not claim schema.md was changed.",
+                    proposal.id,
+                    proposal.base_schema_hash,
+                    proposal.compiled.schema_version,
+                    proposal.impact.affected_pages.len(),
+                ))
+            }
+            "memory.propose" => {
+                let proposal: crate::agent::memory::MemoryProposal = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid memory.propose result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::MemoryProposalConfirmationRequired {
+                        proposal: proposal.clone(),
+                    },
+                );
+                Ok(format!(
+                    "Created pending {} memory candidate {}: {}. Wait for the user's explicit confirmation; do not claim anything was saved.",
+                    match proposal.memory.scope {
+                        crate::agent::memory::MemoryScope::Project => "project",
+                        crate::agent::memory::MemoryScope::Session => "session",
+                    },
+                    proposal.memory.id,
+                    proposal.memory.title,
+                ))
+            }
+            "memory.search" => {
+                let hits: Vec<crate::agent::memory::MemorySearchHit> = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid memory.search result: {err}"))?;
+                if hits.is_empty() {
+                    return Ok("No matching memory entries.".to_string());
+                }
+                let mut summary = format!("{} memory hit(s):\n", hits.len());
+                for hit in hits.iter().take(8) {
+                    summary.push_str(&format!(
+                        "- [{}|{}|{}] {}\n  {}\n",
+                        match hit.memory.scope {
+                            crate::agent::memory::MemoryScope::Project => "project",
+                            crate::agent::memory::MemoryScope::Session => "session",
+                        },
+                        match hit.memory.kind {
+                            crate::agent::memory::MemoryKind::UserPreference => "user_preference",
+                            crate::agent::memory::MemoryKind::ProjectConvention => "project_convention",
+                            crate::agent::memory::MemoryKind::ConfirmedFact => "confirmed_fact",
+                            crate::agent::memory::MemoryKind::Decision => "decision",
+                            crate::agent::memory::MemoryKind::OpenQuestion => "open_question",
+                            crate::agent::memory::MemoryKind::SchemaNote => "schema_note",
+                        },
+                        match hit.memory.confidence {
+                            crate::agent::memory::MemoryConfidence::UserConfirmed => "user_confirmed",
+                            crate::agent::memory::MemoryConfidence::EvidenceBacked => "evidence_backed",
+                            crate::agent::memory::MemoryConfidence::AgentSuggested => "agent_suggested",
+                        },
+                        hit.memory.title,
+                        trim_chars(hit.memory.content.trim(), 480)
+                    ));
+                }
+                Ok(summary)
+            }
+            "memory.list" => {
+                let summary: serde_json::Value = value;
+                let active_count = summary
+                    .get("active")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.len())
+                    .unwrap_or(0);
+                let proposal_count = summary
+                    .get("proposals")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.len())
+                    .unwrap_or(0);
+                Ok(format!(
+                    "{} active memory entr{}; {} pending proposal{}.",
+                    active_count,
+                    if active_count == 1 { "y" } else { "ies" },
+                    proposal_count,
+                    if proposal_count == 1 { "" } else { "s" },
+                ))
+            }
+            "schema.inspect" => {
+                let schema: crate::commands::schema::CompiledSchema = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid schema.inspect result: {err}"))?;
+                Ok(format!(
+                    "schema version={} hash={} pageTypes={} diagnostics={}\n{}",
+                    schema.schema_version,
+                    schema.content_hash,
+                    schema.type_dirs.len(),
+                    schema.diagnostics.len(),
+                    trim_chars(&serde_json::to_string_pretty(&schema).unwrap_or_default(), 6_000),
+                ))
+            }
+            "schema.validate" => {
+                let audit: crate::commands::schema::SchemaImpactReport = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid schema.validate result: {err}"))?;
+                Ok(format!(
+                    "schema audit scanned={} affected={} truncated={}\n{}",
+                    audit.pages_scanned,
+                    audit.affected_pages.len(),
+                    audit.truncated,
+                    trim_chars(&serde_json::to_string_pretty(&audit).unwrap_or_default(), 6_000),
+                ))
+            }
             "wiki.search" => {
                 let search: tools::WikiSearchToolOutput = serde_json::from_value(value)
                     .map_err(|err| format!("Invalid wiki.search result: {err}"))?;
@@ -2849,9 +3014,11 @@ impl AgentRuntime {
         }
     }
 
-    fn tool_context(&self) -> tools::ToolContext<'_> {
+    fn tool_context(&self, session_id: Option<&str>) -> tools::ToolContext<'_> {
         tools::ToolContext {
             project_path: &self.project_path,
+            project_id: &self.project_id,
+            session_id: session_id.map(str::to_string),
             embedding_config: self.embedding_config.clone(),
             web_search_config: self.web_search_config.clone(),
             anytxt_config: self.anytxt_config.clone(),
@@ -3542,6 +3709,12 @@ fn build_agent_loop_user(
         out.push_str("- wiki.read_page: read a specific wiki markdown page by path. Supports optional offset + limit (1-indexed line numbers) for paginating large pages; response is line-numbered for use with wiki.edit_page.\n");
         out.push_str("- source.search: search raw source snippets.\n");
         out.push_str("- graph.search: retrieve relationships, neighbors, backlinks, dependencies, and connections between entities. Prefer it for relational questions and query with concise entity or concept names.\n");
+        out.push_str("- schema.inspect: inspect the compiled project schema version, Page Types routing, and diagnostics before suggesting structural changes.\n");
+        out.push_str("- schema.validate: audit existing wiki pages against the current schema without modifying them.\n");
+        out.push_str("- schema.propose_change: create a pending user-reviewable proposal to replace the complete root schema.md. Use content for the complete proposed Markdown. It never applies the proposal; only the user can approve it in the Schema proposal UI.\n");
+        out.push_str("- memory.search: read project-scoped memory entries (preferences, conventions, confirmed facts, decisions, open questions, schema notes). Read-only; results are user-confirmed knowledge.\n");
+        out.push_str("- memory.list: list active and pending memory entries for the current project (used by management UIs and the Memory confirmation card).\n");
+        out.push_str("- memory.propose: create a pending memory candidate. Use only when the user clearly states a stable preference, confirms a project decision, asks you to remember something, or a claim is backed by a confirmed wiki/reference. Never claim a memory was saved until the user accepts the proposal.\n");
         out.push_str("- wiki.write_page: create or overwrite a Markdown wiki page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". Overwrites existing pages by default (ClaudeCode Write semantics); pass allowOverwrite=false for an explicit create-only guard. The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
         out.push_str("- wiki.edit_page: apply a targeted string replacement to an existing wiki page (old_string → new_string). By default rejects ambiguous matches; pass replace_all=true to batch-replace. Prefer this over wiki.write_page when only a few lines change.\n");
     }
@@ -3853,7 +4026,13 @@ fn normalize_agent_loop_action(mut action: AgentLoopAction) -> AgentLoopAction {
 fn is_agent_loop_tool_name(value: &str) -> bool {
     matches!(
         value,
-        "wiki.search"
+        "schema.inspect"
+            | "schema.validate"
+            | "schema.propose_change"
+            | "memory.search"
+            | "memory.propose"
+            | "memory.list"
+            | "wiki.search"
             | "wiki.read_page"
             | "wiki.write_page"
             | "source.search"
@@ -4255,6 +4434,22 @@ fn require_tool_permission(
             }
             permission_policy.require(AgentCapability::ReadSource)
         }
+        "schema.inspect" | "schema.validate" => {
+            if !request.tools.wiki {
+                return Err(format!("{tool} is disabled for this turn"));
+            }
+            permission_policy.require(AgentCapability::ReadProject)
+        }
+        "schema.propose_change" => {
+            if !request.tools.wiki {
+                return Err("schema.propose_change is disabled for this turn".to_string());
+            }
+            permission_policy.require(AgentCapability::WriteWiki)
+        }
+        "memory.search" | "memory.list" => {
+            permission_policy.require(AgentCapability::ReadProject)
+        }
+        "memory.propose" => permission_policy.require(AgentCapability::WriteWiki),
         "wiki.write_page" => {
             if !request.tools.wiki {
                 return Err("wiki.write_page is disabled for this turn".to_string());

@@ -129,6 +129,49 @@ export interface ChatPendingWikiWrite {
   existedBefore: boolean
 }
 
+export interface ChatSchemaImpactPage {
+  path: string
+  code: string
+  message: string
+  expectedDir?: string
+  expectedType?: string
+}
+
+export interface ChatMemoryProposal {
+  memory: {
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+    confidence: "user_confirmed" | "evidence_backed" | "agent_suggested"
+    reason: string
+    source?: { origin: string; sessionId?: string; referencePaths?: string[] }
+  }
+  createdAt: number
+}
+
+export interface ChatSchemaProposal {
+  id: string
+  baseSchemaHash: string
+  proposedSchema: string
+  compiled: {
+    schemaVersion: number
+    contentHash: string
+    typeDirs: Record<string, string>
+    diagnostics: Array<{ severity: string; code: string; message: string; line?: number }>
+  }
+  impact: {
+    schemaHash: string
+    pagesScanned: number
+    affectedPages: ChatSchemaImpactPage[]
+    truncated: boolean
+  }
+  requiredDirectories: string[]
+  createdAt: number
+  status: "pending" | "applied" | "rejected"
+}
+
 export interface ChatShellCommandApproval {
   /** Exact command presented at the authorization boundary. */
   command: string

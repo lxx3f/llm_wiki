@@ -243,6 +243,36 @@
       "rejected": "Shell command rejected; it was not run",
       "otherResolved": "Continuing with your instructions"
     },
+    "schemaProposal": {
+      "pending": "Schema change needs approval",
+      "title": "Review schema proposal",
+      "description": "Applying updates schema.md and creates any newly declared wiki directories. Existing wiki pages are not moved or rewritten; affected pages remain available in the audit.",
+      "affectedPages": "{{count}} affected page(s)",
+      "directories": "Directories to create",
+      "viewSchema": "Proposed schema",
+      "baseRevision": "Base revision",
+      "apply": "Apply schema change",
+      "reject": "Reject proposal",
+      "applied": "Schema proposal applied",
+      "rejected": "Schema proposal rejected"
+    },
+    "memoryProposal": {
+      "title": "Review memory proposal",
+      "pending": "Memory candidate needs approval",
+      "description": "Memory only takes effect after you accept it. Project-scope entries persist across sessions; session-scope entries stay in this Agent run. Sensitive tokens, keys, and chat transcripts are rejected automatically.",
+      "kind": "Kind",
+      "scope": "Scope",
+      "scopeProject": "project (cross-session)",
+      "scopeSession": "session (current run only)",
+      "confidence": "Confidence",
+      "confidenceUser": "user confirmed",
+      "confidenceEvidence": "evidence backed",
+      "confidenceAgent": "agent suggested",
+      "titleLabel": "Title",
+      "reasonLabel": "Why",
+      "accept": "Remember",
+      "reject": "Don't remember"
+    },
     "skillSources": {
       "project": "Project",
       "claude": "Claude",

@@ -281,6 +281,27 @@ fn handle_request(
         (&Method::Patch, ["projects", project_id, "reviews", review_id]) => {
             handle_patch_review(app, project_id, review_id, body)
         }
+        (&Method::Post, ["projects", project_id, "schema", "proposals"]) => {
+            handle_create_schema_proposal(app, project_id, body)
+        }
+        (&Method::Post, ["projects", project_id, "schema", "proposals", proposal_id, "apply"]) => {
+            handle_apply_schema_proposal(app, project_id, proposal_id, body)
+        }
+        (&Method::Post, ["projects", project_id, "schema", "proposals", proposal_id, "reject"]) => {
+            handle_reject_schema_proposal(app, project_id, proposal_id, body)
+        }
+        (&Method::Get, ["projects", project_id, "memory", "search"]) => handle_memory_search(app, project_id, query),
+        (&Method::Get, ["projects", project_id, "memory", "list"]) => handle_memory_list(app, project_id),
+        (&Method::Post, ["projects", project_id, "memory", "proposals", proposal_id, "accept"]) => handle_memory_proposal_action(app, project_id, proposal_id, "accept"),
+        (&Method::Post, ["projects", project_id, "memory", "proposals", proposal_id, "reject"]) => handle_memory_proposal_action(app, project_id, proposal_id, "reject"),
+        (&Method::Post, ["projects", project_id, "memory", proposal_id, "archive"]) => handle_memory_lifecycle(app, project_id, proposal_id, body, "archive"),
+        (&Method::Post, ["projects", project_id, "memory", proposal_id, "redact"]) => handle_memory_lifecycle(app, project_id, proposal_id, body, "redact"),
+        (&Method::Post, ["projects", project_id, "memory", "imports"]) => handle_memory_import_parse(app, project_id, body),
+        (&Method::Post, ["projects", project_id, "memory", "imports", batch_id, "accept"]) => handle_memory_import_accept(app, project_id, batch_id, body),
+        (&Method::Get, ["projects", project_id, "memory", "imports"]) => handle_memory_import_list(app, project_id),
+        (&Method::Delete, ["projects", project_id, "memory", "imports", batch_id]) => handle_memory_import_discard(app, project_id, batch_id),
+        (&Method::Get, ["projects", project_id, "schema"]) => handle_schema(app, project_id),
+        (&Method::Get, ["projects", project_id, "schema", "audit"]) => handle_schema_audit(app, project_id),
         (&Method::Post, ["projects", project_id, "search"]) => handle_search(app, project_id, body),
         (&Method::Get, ["projects", project_id, "graph"]) => handle_graph(app, project_id, query),
         (&Method::Post, ["projects", project_id, "sources", "rescan"]) => {
@@ -1620,6 +1641,301 @@ fn write_raw_review_array(path: &Path, parsed: &Value) -> Result<(), String> {
     let serialized = serde_json::to_string_pretty(parsed)
         .map_err(|err| format!("Failed to serialize review state: {err}"))?;
     fs::write(path, serialized).map_err(|err| format!("Failed to write review state: {err}"))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaProposalApiRequest {
+    session_id: String,
+    proposed_schema: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaProposalDecisionApiRequest {
+    session_id: String,
+    #[serde(default)]
+    expected_schema_hash: String,
+}
+
+fn handle_schema(app: &AppHandle, project_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    match commands::schema::get_compiled_schema(&project.path) {
+        Ok(schema) => ok(json!({ "schema": schema })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_schema_audit(app: &AppHandle, project_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let schema = match commands::schema::get_compiled_schema(&project.path) {
+        Ok(schema) => schema,
+        Err(error) => return err(400, error),
+    };
+    match commands::schema::audit_project_schema_for_api(&project.path, &schema) {
+        Ok(audit) => ok(json!({ "audit": audit })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_create_schema_proposal(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: SchemaProposalApiRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.session_id.trim().is_empty() || request.proposed_schema.trim().is_empty() {
+        return err(400, "sessionId and proposedSchema are required");
+    }
+    match commands::schema::create_schema_proposal(
+        &project.path,
+        &project.id,
+        &request.session_id,
+        request.proposed_schema,
+    ) {
+        Ok(proposal) => ok(json!({ "proposal": proposal })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_apply_schema_proposal(app: &AppHandle, project_id: &str, proposal_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: SchemaProposalDecisionApiRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.session_id.trim().is_empty() || request.expected_schema_hash.trim().is_empty() {
+        return err(400, "sessionId and expectedSchemaHash are required");
+    }
+    match commands::schema::apply_schema_proposal(
+        &project.path,
+        &project.id,
+        &request.session_id,
+        proposal_id,
+        &request.expected_schema_hash,
+    ) {
+        Ok(result) => ok(json!({ "result": result })),
+        Err(error) => err(409, error),
+    }
+}
+
+fn handle_reject_schema_proposal(app: &AppHandle, project_id: &str, proposal_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: SchemaProposalDecisionApiRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.session_id.trim().is_empty() {
+        return err(400, "sessionId is required");
+    }
+    match commands::schema::reject_schema_proposal(&project.path, &project.id, &request.session_id, proposal_id) {
+        Ok(()) => ok(json!({ "rejected": true })),
+        Err(error) => err(409, error),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MemoryProposalActionRequest {
+    #[serde(default)]
+    session_id: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MemoryLifecycleRequest {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MemoryImportParseRequest {
+    source_format: String,
+    source_label: String,
+    raw: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MemoryImportAcceptRequest {
+    session_id: String,
+    candidate_id: String,
+}
+
+fn handle_memory_search(app: &AppHandle, project_id: &str, query: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let params: std::collections::HashMap<String, String> = url_query_map(query);
+    let message = params.get("query").cloned().unwrap_or_default();
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(8);
+    let kind_filter = params.get("kind").cloned();
+    let kind = match kind_filter.as_deref() {
+        None => None,
+        Some("user_preference") => Some(agent::memory::MemoryKind::UserPreference),
+        Some("project_convention") => Some(agent::memory::MemoryKind::ProjectConvention),
+        Some("confirmed_fact") => Some(agent::memory::MemoryKind::ConfirmedFact),
+        Some("decision") => Some(agent::memory::MemoryKind::Decision),
+        Some("open_question") => Some(agent::memory::MemoryKind::OpenQuestion),
+        Some("schema_note") => Some(agent::memory::MemoryKind::SchemaNote),
+        Some(other) => return err(400, format!("Unknown memory kind: {other}")),
+    };
+    match agent::memory::ProjectMemoryStore::search(&project.path, &project.id, None, &message, kind, limit) {
+        Ok(hits) => ok(json!({ "hits": hits })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_list(app: &AppHandle, project_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    match agent::memory::ProjectMemoryStore::list_active(&project.path, &project.id, None) {
+        Ok(active) => match agent::memory::ProjectMemoryStore::proposals(&project.path, &project.id) {
+            Ok(proposals) => match agent::memory::ProjectMemoryStore::archive(&project.path, &project.id) {
+                Ok(archive) => ok(json!({ "active": active, "proposals": proposals, "archive": archive })),
+                Err(error) => err(400, error),
+            },
+            Err(error) => err(400, error),
+        },
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_proposal_action(app: &AppHandle, project_id: &str, memory_id: &str, action: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let outcome = match action {
+        "accept" => agent::memory::ProjectMemoryStore::accept_proposal(&project.path, &project.id, memory_id)
+            .map(|value| serde_json::to_value(value).unwrap_or(serde_json::Value::Null)),
+        "reject" => agent::memory::ProjectMemoryStore::reject_proposal(&project.path, memory_id, "rejected via API")
+            .map(|_| serde_json::Value::Bool(true)),
+        other => return err(400, format!("Unknown memory proposal action: {other}")),
+    };
+    match outcome {
+        Ok(value) => ok(json!({ "result": value })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_lifecycle(app: &AppHandle, project_id: &str, memory_id: &str, body: &str, action: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: MemoryLifecycleRequest = serde_json::from_str(body).unwrap_or_default();
+    let reason = request.reason.unwrap_or_else(|| match action {
+        "redact" => "redacted via API".to_string(),
+        _ => "archived via API".to_string(),
+    });
+    let result = match action {
+        "archive" => agent::memory::ProjectMemoryStore::archive_memory(&project.path, memory_id, &reason),
+        "redact" => agent::memory::ProjectMemoryStore::redact_memory(&project.path, memory_id, &reason),
+        other => return err(400, format!("Unknown memory lifecycle action: {other}")),
+    };
+    match result {
+        Ok(()) => ok(json!({ "ok": true })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_import_parse(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: MemoryImportParseRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.source_format.trim().is_empty() || request.raw.trim().is_empty() {
+        return err(400, "sourceFormat and raw are required");
+    }
+    match agent::memory::MemoryImporter::parse(&project.path, &request.source_format, &request.source_label, &request.raw) {
+        Ok(batch) => ok(json!({ "batch": batch })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_import_accept(app: &AppHandle, project_id: &str, batch_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: MemoryImportAcceptRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    match agent::memory::MemoryImporter::accept_candidate(
+        &project.path,
+        &project.id,
+        if request.session_id.trim().is_empty() { None } else { Some(request.session_id.as_str()) },
+        batch_id,
+        &request.candidate_id,
+    ) {
+        Ok(memory) => ok(json!({ "memory": memory })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_import_list(app: &AppHandle, project_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    match agent::memory::list_import_batches(&project.path, &project.id) {
+        Ok(batches) => ok(json!({ "batches": batches })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_memory_import_discard(app: &AppHandle, project_id: &str, batch_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    match agent::memory::discard_import_batch(&project.path, batch_id) {
+        Ok(()) => ok(json!({ "discarded": true })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn url_query_map(query: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for pair in query.split('&') {
+        if pair.is_empty() { continue; }
+        if let Some((key, value)) = pair.split_once('=') {
+            map.insert(percent_decode(key), percent_decode(value));
+        } else {
+            map.insert(percent_decode(pair), String::new());
+        }
+    }
+    map
 }
 
 #[derive(Deserialize)]

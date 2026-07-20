@@ -12,10 +12,10 @@ function msg(partial: Partial<DisplayMessage> & Pick<DisplayMessage, "role" | "c
 
 describe("chatMessagesToLLM", () => {
   it("keeps the legacy string shape when a message has no images", () => {
-    const out = chatMessagesToLLM([msg({ role: "user", content: "hello" })])
-    expect(out[0].role).toBe("user")
-    expect(out[0].content).toBe("hello")
-    expect(typeof out[0].content).toBe("string")
+    const message = msg({ role: "user", content: "hello" })
+    const out = chatMessagesToLLM([message])
+    // The implementation forwards the source message's id as the wire id.
+    expect(out).toEqual([{ id: message.id, role: "user", content: "hello" }])
   })
 
   it("keeps string shape when images is an empty array", () => {

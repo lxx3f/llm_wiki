@@ -7,6 +7,7 @@
 
 pub mod cancel;
 pub mod context;
+pub mod memory;
 pub mod events;
 pub mod mcp_client;
 pub mod permissions;

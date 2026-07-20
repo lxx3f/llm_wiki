@@ -109,6 +109,58 @@ export interface ApiSchemaApplyResult {
   createdDirectories: string[]
 }
 
+export interface ApiMemorySearchHit {
+  memory: {
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+    confidence: "user_confirmed" | "evidence_backed" | "agent_suggested"
+  }
+  score: number
+}
+
+export interface ApiMemoryListResponse {
+  active: Array<{
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+    confidence: "user_confirmed" | "evidence_backed" | "agent_suggested"
+  }>
+  proposals: Array<{
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+  }>
+  archive: Array<unknown>
+}
+
+export interface ApiMemoryImportCandidate {
+  id: string
+  kind: string
+  scope: "project" | "session"
+  title: string
+  content: string
+  confidence: string
+  sourceLabel: string
+  referencePaths: string[]
+  sensitive: boolean
+  duplicateOf?: string | null
+}
+
+export interface ApiMemoryImportBatch {
+  id: string
+  sourceFile: string
+  sourceFormat: string
+  candidates: ApiMemoryImportCandidate[]
+  createdAt: number
+}
+
 export interface ApiGraphNode {
   id: string
   label: string
@@ -314,6 +366,76 @@ export class LlmWikiApiClient {
     return parseSchema(json.schema)
   }
 
+  async memorySearch(projectId = "current", query = "", options: { kind?: string; limit?: number } = {}): Promise<ApiMemorySearchHit[]> {
+    const params = new URLSearchParams({ query })
+    if (options.kind) params.set("kind", options.kind)
+    if (options.limit !== undefined) params.set("limit", String(options.limit))
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/search?${params.toString()}`)
+    return Array.isArray(json.hits) ? json.hits.map(parseMemorySearchHit) : []
+  }
+
+  async memoryList(projectId = "current"): Promise<ApiMemoryListResponse> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/list`)
+    return {
+      active: Array.isArray(json.active) ? json.active.map(parseMemoryEntry) : [],
+      proposals: Array.isArray(json.proposals) ? json.proposals.map(parseMemoryEntry) : [],
+      archive: Array.isArray(json.archive) ? json.archive : [],
+    }
+  }
+
+  async memoryAcceptProposal(projectId: string, memoryId: string): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/proposals/${encodeURIComponent(memoryId)}/accept`, {
+      method: "POST",
+    })
+  }
+
+  async memoryRejectProposal(projectId: string, memoryId: string, reason = "rejected via MCP"): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/proposals/${encodeURIComponent(memoryId)}/reject`, {
+      method: "POST",
+      body: { reason },
+    })
+  }
+
+  async memoryArchive(projectId: string, memoryId: string, reason = "archived via MCP"): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}/archive`, {
+      method: "POST",
+      body: { reason },
+    })
+  }
+
+  async memoryRedact(projectId: string, memoryId: string, reason = "redacted via MCP"): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}/redact`, {
+      method: "POST",
+      body: { reason },
+    })
+  }
+
+  async memoryImportParse(projectId: string, sourceFormat: string, sourceLabel: string, raw: string): Promise<ApiMemoryImportBatch> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports`, {
+      method: "POST",
+      body: { sourceFormat, sourceLabel, raw },
+    })
+    return parseMemoryImportBatch(json.batch)
+  }
+
+  async memoryImportAccept(projectId: string, batchId: string, candidateId: string, sessionId: string): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports/${encodeURIComponent(batchId)}/accept`, {
+      method: "POST",
+      body: { sessionId, candidateId },
+    })
+  }
+
+  async memoryImportList(projectId = "current"): Promise<ApiMemoryImportBatch[]> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports`)
+    return Array.isArray(json.batches) ? json.batches.map(parseMemoryImportBatch) : []
+  }
+
+  async memoryImportDiscard(projectId: string, batchId: string): Promise<unknown> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/imports/${encodeURIComponent(batchId)}`, {
+      method: "DELETE",
+    })
+  }
+
   async schemaAudit(projectId = "current"): Promise<ApiSchemaImpactReport> {
     const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/audit`)
     return parseSchemaImpact(json.audit)
@@ -361,7 +483,7 @@ export class LlmWikiApiClient {
     })
   }
 
-  private async request(path: string, options: { method?: "GET" | "POST"; body?: unknown; auth?: boolean } = {}): Promise<Record<string, unknown>> {
+  private async request(path: string, options: { method?: "DELETE" | "GET" | "POST"; body?: unknown; auth?: boolean } = {}): Promise<Record<string, unknown>> {
     const url = `${this.baseUrl}${apiPath(path)}`
     const headers: Record<string, string> = { Accept: "application/json" }
     if (options.auth !== false && this.token?.trim()) {
@@ -435,6 +557,57 @@ function parseSchemaProposal(value: unknown): ApiSchemaProposal {
 function parseSchemaApplyResult(value: unknown): ApiSchemaApplyResult {
   const obj = requireObject(value, "schema apply result")
   return { schemaHash: String(obj.schemaHash ?? ""), schemaVersion: numberOrUndefined(obj.schemaVersion) ?? 1, impact: parseSchemaImpact(obj.impact), createdDirectories: Array.isArray(obj.createdDirectories) ? obj.createdDirectories.filter((item): item is string => typeof item === "string") : [] }
+}
+
+function parseMemoryEntry(value: unknown): ApiMemoryListResponse["active"][number] {
+  const obj = requireObject(value, "memory entry")
+  return {
+    id: String(obj.id ?? ""),
+    kind: String(obj.kind ?? "user_preference"),
+    scope: (obj.scope === "session" ? "session" : "project") as "project" | "session",
+    title: String(obj.title ?? ""),
+    content: String(obj.content ?? ""),
+    confidence: normalizeConfidence(obj.confidence),
+  }
+}
+
+function normalizeConfidence(value: unknown): "user_confirmed" | "evidence_backed" | "agent_suggested" {
+  if (value === "evidence_backed") return "evidence_backed"
+  if (value === "agent_suggested") return "agent_suggested"
+  return "user_confirmed"
+}
+
+function parseMemorySearchHit(value: unknown): ApiMemorySearchHit {
+  const entry = parseMemoryEntry(value)
+  const obj = requireObject(value, "memory hit")
+  return { memory: entry, score: numberOrUndefined(obj.score) ?? 0 }
+}
+
+function parseMemoryImportCandidate(value: unknown): ApiMemoryImportCandidate {
+  const obj = requireObject(value, "memory import candidate")
+  return {
+    id: String(obj.id ?? ""),
+    kind: String(obj.kind ?? "user_preference"),
+    scope: (obj.scope === "session" ? "session" : "project") as "project" | "session",
+    title: String(obj.title ?? ""),
+    content: String(obj.content ?? ""),
+    confidence: String(obj.confidence ?? "user_confirmed"),
+    sourceLabel: String(obj.sourceLabel ?? ""),
+    referencePaths: Array.isArray(obj.referencePaths) ? obj.referencePaths.filter((item): item is string => typeof item === "string") : [],
+    sensitive: obj.sensitive === true,
+    duplicateOf: typeof obj.duplicateOf === "string" ? obj.duplicateOf : null,
+  }
+}
+
+function parseMemoryImportBatch(value: unknown): ApiMemoryImportBatch {
+  const obj = requireObject(value, "memory import batch")
+  return {
+    id: String(obj.id ?? ""),
+    sourceFile: String(obj.sourceFile ?? ""),
+    sourceFormat: String(obj.sourceFormat ?? ""),
+    createdAt: numberOrUndefined(obj.createdAt) ?? 0,
+    candidates: Array.isArray(obj.candidates) ? obj.candidates.map(parseMemoryImportCandidate) : [],
+  }
 }
 
 function parseProject(value: unknown): ApiProject {

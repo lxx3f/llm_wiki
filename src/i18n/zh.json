@@ -256,6 +256,23 @@
       "applied": "Schema 提案已应用",
       "rejected": "Schema 提案已拒绝"
     },
+    "memoryProposal": {
+      "title": "审阅记忆候选",
+      "pending": "记忆候选需要确认",
+      "description": "只有在用户接受后记忆才会生效。项目级记忆会跨会话保留；会话级记忆仅在本轮 Agent 运行中可用。Token、密钥、完整聊天记录等敏感内容会被自动拒绝。",
+      "kind": "类别",
+      "scope": "范围",
+      "scopeProject": "项目级（跨会话）",
+      "scopeSession": "会话级（仅当前运行）",
+      "confidence": "可信度",
+      "confidenceUser": "用户已确认",
+      "confidenceEvidence": "有证据支持",
+      "confidenceAgent": "Agent 推测",
+      "titleLabel": "标题",
+      "reasonLabel": "建议原因",
+      "accept": "记住",
+      "reject": "不记住"
+    },
     "skillSources": {
       "project": "项目",
       "claude": "Claude",

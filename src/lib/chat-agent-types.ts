@@ -137,6 +137,20 @@ export interface ChatSchemaImpactPage {
   expectedType?: string
 }
 
+export interface ChatMemoryProposal {
+  memory: {
+    id: string
+    kind: string
+    scope: "project" | "session"
+    title: string
+    content: string
+    confidence: "user_confirmed" | "evidence_backed" | "agent_suggested"
+    reason: string
+    source?: { origin: string; sessionId?: string; referencePaths?: string[] }
+  }
+  createdAt: number
+}
+
 export interface ChatSchemaProposal {
   id: string
   baseSchemaHash: string

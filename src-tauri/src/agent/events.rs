@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::schema::SchemaProposal;
+use crate::agent::memory::MemoryProposal;
 
 use super::types::{AgentReference, AgentUserInputRequest, PendingWikiWrite};
 
@@ -43,6 +44,9 @@ pub enum AgentEvent {
     },
     SchemaProposalConfirmationRequired {
         proposal: SchemaProposal,
+    },
+    MemoryProposalConfirmationRequired {
+        proposal: MemoryProposal,
     },
     WikiWriteConfirmationRequired {
         #[serde(rename = "pendingWrite")]

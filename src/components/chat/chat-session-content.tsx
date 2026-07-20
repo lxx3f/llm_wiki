@@ -16,7 +16,7 @@ import { executeIngestWrites } from "@/lib/ingest"
 import { openPathInProject, readFile } from "@/commands/fs"
 import { getFileName, isAbsolutePath, normalizePath } from "@/lib/path-utils"
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search"
-import type { ChatAgentEvent, ChatAgentFileChange, ChatAgentStep, ChatPendingWikiWrite, ChatSchemaProposal, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { ChatAgentEvent, ChatAgentFileChange, ChatAgentStep, ChatMemoryProposal, ChatPendingWikiWrite, ChatSchemaProposal, ChatUserInputRequest } from "@/lib/chat-agent-types"
 import type { ChatMessage as LlmChatMessage, ContentBlock } from "@/lib/llm-client"
 import { FilePreview } from "@/components/editor/file-preview"
 import { WikiReader } from "@/components/editor/wiki-reader"
@@ -69,6 +69,7 @@ interface BackendAgentEventPayload {
     previousContent?: string
     pendingWrite?: ChatPendingWikiWrite
     proposal?: ChatSchemaProposal
+    memory?: ChatMemoryProposal
   }
 }
 
@@ -682,6 +683,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           const references: MessageReference[] = []
           let pendingWikiWrite: ChatPendingWikiWrite | undefined
           let pendingSchemaProposal: ChatSchemaProposal | undefined
+          let pendingMemoryProposal: ChatMemoryProposal | undefined
           const backendEvents: BackendAgentToolEvent[] = []
           const fileChanges = new Map<string, ChatAgentFileChange>()
           const fileEditChanges: ChatAgentFileChange[] = []
@@ -738,6 +740,10 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             }
             if (agentEvent.type === "schemaProposalConfirmationRequired" && agentEvent.proposal) {
               pendingSchemaProposal = agentEvent.proposal
+              return
+            }
+            if (agentEvent.type === "memoryProposalConfirmationRequired" && agentEvent.memory) {
+              pendingMemoryProposal = agentEvent.memory
               return
             }
             if (agentEvent.type === "messageDelta" && agentEvent.text) {
@@ -952,6 +958,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           )
           if (pendingWikiWrite) addPendingWikiWriteToMessage(convId, pendingWikiWrite)
           if (pendingSchemaProposal) addPendingSchemaProposalToMessage(convId, pendingSchemaProposal)
+          if (pendingMemoryProposal) addPendingMemoryProposalToMessage(convId, pendingMemoryProposal)
           if (!pendingUserInputRequest) {
             autoOpenSingleGeneratedOutput(convId, references)
           }
@@ -1404,6 +1411,52 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     })
   }, [])
 
+  const addPendingMemoryProposalToMessage = useCallback((conversationId: string, memoryProposal: ChatMemoryProposal) => {
+    useChatStore.setState((state) => {
+      const messages = [...state.messages]
+      const index = [...messages].reverse().findIndex((message) => message.conversationId === conversationId && message.role === "assistant")
+      if (index === -1) return state
+      const messageIndex = messages.length - 1 - index
+      messages[messageIndex] = { ...messages[messageIndex], pendingMemoryProposal: memoryProposal }
+      return { messages }
+    })
+  }, [])
+
+  const handleAcceptMemoryProposal = useCallback(async (messageId: string, proposal: ChatMemoryProposal) => {
+    if (!project || activeStreaming) return
+    try {
+      await invoke("memory_accept_proposal", {
+        projectId: project.id,
+        memoryId: proposal.memory.id,
+      })
+    } catch (error) {
+      console.error("[chat] failed to accept memory proposal:", error)
+    }
+    useChatStore.setState((state) => ({
+      messages: state.messages.map((message) => message.id === messageId
+        ? { ...message, pendingMemoryProposal: undefined }
+        : message),
+    }))
+  }, [activeStreaming, project])
+
+  const handleRejectMemoryProposal = useCallback(async (messageId: string, proposal: ChatMemoryProposal) => {
+    if (!project || activeStreaming) return
+    try {
+      await invoke("memory_reject_proposal", {
+        projectId: project.id,
+        memoryId: proposal.memory.id,
+        reason: "rejected in chat",
+      })
+    } catch (error) {
+      console.error("[chat] failed to reject memory proposal:", error)
+    }
+    useChatStore.setState((state) => ({
+      messages: state.messages.map((message) => message.id === messageId
+        ? { ...message, pendingMemoryProposal: undefined }
+        : message),
+    }))
+  }, [activeStreaming, project])
+
   const addPendingSchemaProposalToMessage = useCallback((conversationId: string, proposal: ChatSchemaProposal) => {
     useChatStore.setState((state) => {
       const messages = [...state.messages]
@@ -1643,6 +1696,14 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                           disabled={activeStreaming || !isLastAssistant}
                           onApply={() => void handleApplySchemaProposal(msg.id, msg.pendingSchemaProposal!)}
                           onReject={() => void handleRejectSchemaProposal(msg.id, msg.pendingSchemaProposal!)}
+                        />
+                      )}
+                      {msg.pendingMemoryProposal && (
+                        <MemoryProposalCard
+                          proposal={msg.pendingMemoryProposal}
+                          disabled={activeStreaming || !isLastAssistant}
+                          onAccept={() => void handleAcceptMemoryProposal(msg.id, msg.pendingMemoryProposal!)}
+                          onReject={() => void handleRejectMemoryProposal(msg.id, msg.pendingMemoryProposal!)}
                         />
                       )}
                       </>
@@ -1934,6 +1995,47 @@ function ChatReferencePreviewPanel({
         <ChatReferencePreviewContent preview={preview} />
       </div>
     </aside>
+  )
+}
+
+function MemoryProposalCard({
+  proposal,
+  disabled,
+  onAccept,
+  onReject,
+}: {
+  proposal: ChatMemoryProposal
+  disabled: boolean
+  onAccept: () => void
+  onReject: () => void
+}) {
+  const { t } = useTranslation()
+  const memory = proposal.memory
+  const scopeLabel = memory.scope === "project" ? t("chat.memoryProposal.scopeProject") : t("chat.memoryProposal.scopeSession")
+  const confidenceLabel = (() => {
+    switch (memory.confidence) {
+      case "user_confirmed": return t("chat.memoryProposal.confidenceUser")
+      case "evidence_backed": return t("chat.memoryProposal.confidenceEvidence")
+      default: return t("chat.memoryProposal.confidenceAgent")
+    }
+  })()
+  return (
+    <section className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-sm" aria-label={t("chat.memoryProposal.title")}>
+      <div className="font-medium">{t("chat.memoryProposal.pending")}</div>
+      <p className="mt-1 text-xs text-muted-foreground">{t("chat.memoryProposal.description")}</p>
+      <div className="mt-2 grid gap-1 text-xs">
+        <span><strong>{t("chat.memoryProposal.kind")}</strong>: {memory.kind}</span>
+        <span><strong>{t("chat.memoryProposal.scope")}</strong>: {scopeLabel}</span>
+        <span><strong>{t("chat.memoryProposal.confidence")}</strong>: {confidenceLabel}</span>
+        <span><strong>{t("chat.memoryProposal.titleLabel")}</strong>: {memory.title}</span>
+      </div>
+      <pre className="mt-2 max-h-44 overflow-auto rounded border border-border/60 bg-muted/40 p-2 whitespace-pre-wrap break-words font-sans text-xs">{memory.content}</pre>
+      <p className="mt-2 text-[11px] text-muted-foreground">{t("chat.memoryProposal.reasonLabel")}: {memory.reason}</p>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button variant="outline" size="sm" disabled={disabled} onClick={onReject}>{t("chat.memoryProposal.reject")}</Button>
+        <Button size="sm" disabled={disabled} onClick={onAccept}>{t("chat.memoryProposal.accept")}</Button>
+      </div>
+    </section>
   )
 }
 

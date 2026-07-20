@@ -219,6 +219,118 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      name: "llm_wiki_memory_search",
+      description: "Search project-scoped memory entries. Returns user-confirmed knowledge (preferences, conventions, confirmed facts, decisions, open questions, schema notes).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+          query: { type: "string", description: "Optional search query." },
+          kind: { type: "string", enum: ["user_preference", "project_convention", "confirmed_fact", "decision", "open_question", "schema_note"] },
+          limit: { type: "number", description: "Maximum hits (1-32)." },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_list",
+      description: "List active, pending, and archived memory entries for a project.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." } },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_accept_proposal",
+      description: "Accept a pending memory proposal. Only available for memories the user has reviewed through the local API.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." }, memory_id: { type: "string" } },
+        required: ["memory_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_reject_proposal",
+      description: "Reject a pending memory proposal without storing it.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string" }, memory_id: { type: "string" }, reason: { type: "string" } },
+        required: ["memory_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_archive",
+      description: "Archive an active memory entry. Use to retire outdated knowledge without deleting the audit trail.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string" }, memory_id: { type: "string" }, reason: { type: "string" } },
+        required: ["memory_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_redact",
+      description: "Permanently redact an active memory entry: clears title/content but preserves the audit event.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string" }, memory_id: { type: "string" }, reason: { type: "string" } },
+        required: ["memory_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_import_parse",
+      description: "Parse a memory export from JSON, JSONL, or Markdown into pending candidates. Candidates are NOT active until the user accepts them.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+          source_format: { type: "string", enum: ["json", "jsonl", "markdown"] },
+          source_label: { type: "string", description: "Human-readable label for the import source." },
+          raw: { type: "string", description: "Raw file contents to parse." },
+        },
+        required: ["source_format", "raw"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_import_accept",
+      description: "Accept a parsed memory import candidate. The candidate becomes an active memory entry visible to the Agent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          batch_id: { type: "string" },
+          candidate_id: { type: "string" },
+          session_id: { type: "string" },
+        },
+        required: ["batch_id", "candidate_id", "session_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_import_list",
+      description: "List pending memory import batches for a project.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." } },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_memory_import_discard",
+      description: "Discard a pending memory import batch without accepting any candidates.",
+      inputSchema: {
+        type: "object",
+        properties: { project_id: { type: "string" }, batch_id: { type: "string" } },
+        required: ["batch_id"],
+        additionalProperties: false,
+      },
+    },
   ],
 }))
 
@@ -334,6 +446,67 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "llm_wiki_rescan_sources": {
         await assertMcpEnabled()
         return textResult(JSON.stringify(await client.rescan(projectId(args)), null, 2))
+      }
+      case "llm_wiki_memory_search": {
+        await assertMcpEnabled()
+        const hits = await client.memorySearch(projectId(args), stringArg(args.query, "query"), {
+          kind: optionalStringArg(args.kind),
+          limit: numberArg(args.limit),
+        })
+        return textResult(JSON.stringify(hits, null, 2))
+      }
+      case "llm_wiki_memory_list": {
+        await assertMcpEnabled()
+        return textResult(JSON.stringify(await client.memoryList(projectId(args)), null, 2))
+      }
+      case "llm_wiki_memory_accept_proposal": {
+        await assertMcpEnabled()
+        await client.memoryAcceptProposal(projectId(args), stringArg(args.memory_id, "memory_id"))
+        return textResult("Memory proposal accepted.")
+      }
+      case "llm_wiki_memory_reject_proposal": {
+        await assertMcpEnabled()
+        await client.memoryRejectProposal(projectId(args), stringArg(args.memory_id, "memory_id"), optionalStringArg(args.reason) ?? "rejected via MCP")
+        return textResult("Memory proposal rejected.")
+      }
+      case "llm_wiki_memory_archive": {
+        await assertMcpEnabled()
+        await client.memoryArchive(projectId(args), stringArg(args.memory_id, "memory_id"), optionalStringArg(args.reason) ?? "archived via MCP")
+        return textResult("Memory archived.")
+      }
+      case "llm_wiki_memory_redact": {
+        await assertMcpEnabled()
+        await client.memoryRedact(projectId(args), stringArg(args.memory_id, "memory_id"), optionalStringArg(args.reason) ?? "redacted via MCP")
+        return textResult("Memory redacted.")
+      }
+      case "llm_wiki_memory_import_parse": {
+        await assertMcpEnabled()
+        const batch = await client.memoryImportParse(
+          projectId(args),
+          stringArg(args.source_format, "source_format"),
+          optionalStringArg(args.source_label) ?? "external-import",
+          stringArg(args.raw, "raw"),
+        )
+        return textResult(JSON.stringify(batch, null, 2))
+      }
+      case "llm_wiki_memory_import_accept": {
+        await assertMcpEnabled()
+        await client.memoryImportAccept(
+          projectId(args),
+          stringArg(args.batch_id, "batch_id"),
+          stringArg(args.candidate_id, "candidate_id"),
+          stringArg(args.session_id, "session_id"),
+        )
+        return textResult("Memory import candidate accepted.")
+      }
+      case "llm_wiki_memory_import_list": {
+        await assertMcpEnabled()
+        return textResult(JSON.stringify(await client.memoryImportList(projectId(args)), null, 2))
+      }
+      case "llm_wiki_memory_import_discard": {
+        await assertMcpEnabled()
+        await client.memoryImportDiscard(projectId(args), stringArg(args.batch_id, "batch_id"))
+        return textResult("Memory import batch discarded.")
       }
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`)

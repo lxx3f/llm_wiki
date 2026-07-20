@@ -251,6 +251,230 @@ async fn schema_reject_proposal(
 }
 
 #[tauri::command]
+async fn memory_search(
+    app: tauri::AppHandle,
+    project_id: String,
+    query: String,
+    kind: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<agent::memory::MemorySearchHit>, String> {
+    run_guarded_async("memory_search", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        let session_id = current_session_id(&app, &project.id).unwrap_or_default();
+        let parsed_kind = parse_memory_kind(kind.as_deref())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::ProjectMemoryStore::search(
+                &project.path,
+                &project.id,
+                if session_id.is_empty() { None } else { Some(session_id.as_str()) },
+                &query,
+                parsed_kind,
+                limit.unwrap_or(8),
+            )
+        })
+        .await
+        .map_err(|error| format!("memory_search task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_list(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    run_guarded_async("memory_list", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        let session_id = current_session_id(&app, &project.id).unwrap_or_default();
+        tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+            let active = agent::memory::ProjectMemoryStore::list_active(
+                &project.path,
+                &project.id,
+                if session_id.is_empty() { None } else { Some(session_id.as_str()) },
+            )?;
+            let proposals = agent::memory::ProjectMemoryStore::proposals(&project.path, &project.id)?;
+            let archive = agent::memory::ProjectMemoryStore::archive(&project.path, &project.id)?;
+            Ok(serde_json::json!({
+                "active": active,
+                "proposals": proposals,
+                "archive": archive,
+            }))
+        })
+        .await
+        .map_err(|error| format!("memory_list task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_accept_proposal(
+    app: tauri::AppHandle,
+    project_id: String,
+    memory_id: String,
+) -> Result<agent::memory::ProjectMemory, String> {
+    run_guarded_async("memory_accept_proposal", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::ProjectMemoryStore::accept_proposal(&project.path, &project.id, &memory_id)
+        })
+        .await
+        .map_err(|error| format!("memory_accept_proposal task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_reject_proposal(
+    app: tauri::AppHandle,
+    project_id: String,
+    memory_id: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    run_guarded_async("memory_reject_proposal", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        let reason = reason.unwrap_or_else(|| "rejected via UI".to_string());
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::ProjectMemoryStore::reject_proposal(&project.path, &memory_id, &reason)
+        })
+        .await
+        .map_err(|error| format!("memory_reject_proposal task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_archive(
+    app: tauri::AppHandle,
+    project_id: String,
+    memory_id: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    run_guarded_async("memory_archive", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        let reason = reason.unwrap_or_else(|| "archived via UI".to_string());
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::ProjectMemoryStore::archive_memory(&project.path, &memory_id, &reason)
+        })
+        .await
+        .map_err(|error| format!("memory_archive task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_redact(
+    app: tauri::AppHandle,
+    project_id: String,
+    memory_id: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    run_guarded_async("memory_redact", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        let reason = reason.unwrap_or_else(|| "redacted via UI".to_string());
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::ProjectMemoryStore::redact_memory(&project.path, &memory_id, &reason)
+        })
+        .await
+        .map_err(|error| format!("memory_redact task join error: {error}"))?
+    })
+    .await
+}
+
+fn parse_memory_kind(value: Option<&str>) -> Result<Option<agent::memory::MemoryKind>, String> {
+    Ok(match value {
+        None => None,
+        Some("user_preference") => Some(agent::memory::MemoryKind::UserPreference),
+        Some("project_convention") => Some(agent::memory::MemoryKind::ProjectConvention),
+        Some("confirmed_fact") => Some(agent::memory::MemoryKind::ConfirmedFact),
+        Some("decision") => Some(agent::memory::MemoryKind::Decision),
+        Some("open_question") => Some(agent::memory::MemoryKind::OpenQuestion),
+        Some("schema_note") => Some(agent::memory::MemoryKind::SchemaNote),
+        Some(other) => return Err(format!("Unknown memory kind: {other}")),
+    })
+}
+
+fn current_session_id(_app: &tauri::AppHandle, _project_id: &str) -> Result<String, String> {
+    Ok(String::new())
+}
+
+#[tauri::command]
+async fn memory_import_parse(
+    app: tauri::AppHandle,
+    project_id: String,
+    source_format: String,
+    source_label: String,
+    raw: String,
+) -> Result<agent::memory::MemoryImportBatch, String> {
+    run_guarded_async("memory_import_parse", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::MemoryImporter::parse(&project.path, &source_format, &source_label, &raw)
+        })
+        .await
+        .map_err(|error| format!("memory_import_parse task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_import_accept(
+    app: tauri::AppHandle,
+    project_id: String,
+    session_id: String,
+    batch_id: String,
+    candidate_id: String,
+) -> Result<agent::memory::ProjectMemory, String> {
+    run_guarded_async("memory_import_accept", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::MemoryImporter::accept_candidate(
+                &project.path,
+                &project.id,
+                if session_id.is_empty() { None } else { Some(session_id.as_str()) },
+                &batch_id,
+                &candidate_id,
+            )
+        })
+        .await
+        .map_err(|error| format!("memory_import_accept task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_import_list(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Vec<agent::memory::MemoryImportBatch>, String> {
+    run_guarded_async("memory_import_list", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::list_import_batches(&project.path, &project.id)
+        })
+        .await
+        .map_err(|error| format!("memory_import_list task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn memory_import_discard(
+    app: tauri::AppHandle,
+    project_id: String,
+    batch_id: String,
+) -> Result<(), String> {
+    run_guarded_async("memory_import_discard", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            agent::memory::discard_import_batch(&project.path, &batch_id)
+        })
+        .await
+        .map_err(|error| format!("memory_import_discard task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
 fn agent_cancel_turn(
     app: tauri::AppHandle,
     project_id: String,
@@ -802,6 +1026,16 @@ pub fn run() {
             schema_create_proposal,
             schema_apply_proposal,
             schema_reject_proposal,
+            memory_search,
+            memory_list,
+            memory_accept_proposal,
+            memory_reject_proposal,
+            memory_archive,
+            memory_redact,
+            memory_import_parse,
+            memory_import_accept,
+            memory_import_list,
+            memory_import_discard,
             agent_cancel_turn,
             agent_get_session,
             agent_list_sessions,

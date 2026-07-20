@@ -84,6 +84,11 @@ const SHELL_DENY_TOKENS: &[&str] = &[
     "curl", "wget", "scp", "ssh", "nc", "telnet", "rsync", "ftp",
     // Privilege escalation
     "sudo", "doas", "runas", "su",
+    // Command wrappers and interpreters make it unsafe to infer the actual
+    // child program from a flat command line. Keep them behind the same manual
+    // approval boundary rather than trying to parse all shell semantics.
+    "env", "command", "exec", "sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh",
+    "xargs", "nice", "nohup",
 ];
 
 /// Substrings that always require approval, regardless of the binary match.
@@ -105,7 +110,7 @@ const SHELL_DENY_SUBSTRINGS: &[&str] = &[
     // Shell substitution — already blocked by conservative scope, repeated
     // here so Enhanced mode rejects it too even when the wrapping binary
     // (e.g. `echo`) is on the safe list.
-    "$(",
+    "$(", "`",
     // Protected system paths (writes to system config / boot / runtime state).
     "/etc/",
     "/boot/",
@@ -879,13 +884,13 @@ impl AgentRuntime {
                     .filter(|reference| reference.kind == "wiki")
                     .take(2)
                     .filter_map(|reference| {
-                        tools::read_wiki_page(&self.project_path, &reference.path)
+                        tools::read_wiki_page(&self.project_path, &reference.path, None, None)
                             .ok()
-                            .map(|content| {
+                            .map(|read| {
                                 format!(
                                     "Excerpt from {}:\n{}",
                                     reference.path,
-                                    collapse_whitespace(&content)
+                                    collapse_whitespace(&read.content)
                                         .chars()
                                         .take(2_000)
                                         .collect::<String>()
@@ -1578,45 +1583,11 @@ impl AgentRuntime {
             .flat_map(|session| session.snapshot_definitions())
             .collect();
 
-        if let Some(command) = request
-            .shell_command
-            .as_deref()
-            .map(str::trim)
-            .filter(|command| !command.is_empty())
-        {
-            if is_shell_command_allowed_without_prompt(
-                command,
-                &request.approved_shell_commands,
-                &self.project_path,
-                self.enhanced_shell_mode,
-            ) {
-                let approved_action = AgentLoopAction {
-                    action: "tool".to_string(),
-                    tool: Some("shell.exec".to_string()),
-                    command: Some(command.to_string()),
-                    timeout_seconds: None,
-                    ..AgentLoopAction::default()
-                };
-                let observation = self
-                    .execute_agent_loop_tool(
-                        request,
-                        &session_id,
-                        &approved_action,
-                        &permission_policy,
-                        &tool_registry,
-                        &skills,
-                        &mut references,
-                        &mut tool_events,
-                        &mut events,
-                        &event_sink,
-                        cancellation,
-                        &external_mcp_sessions,
-                        &external_mcp_tool_map,
-                    )
-                    .await?;
-                observations.push(observation);
-            }
-        }
+        // `shell_command` identifies the exact command whose approval is carried
+        // in `approved_shell_commands`. Do not pre-execute it here: the model's
+        // normal `shell.exec` tool action performs it once, preserving a single
+        // action/result observation in the loop and avoiding duplicate side
+        // effects when the resume prompt reaches the same command.
 
         for iteration in 0..max_iterations {
             check_cancel(cancellation)?;
@@ -2583,8 +2554,13 @@ impl AgentRuntime {
                     .as_deref()
                     .or(action.query.as_deref())
                     .map(str::trim)
-                    .filter(|command| !command.is_empty())
-                    .ok_or_else(|| "shell.exec requires command".to_string())?;
+                    .filter(|command| !command.is_empty());
+                let command = match command {
+                    Some(c) => c.to_string(),
+                    None => {
+                        return Err(format_shell_exec_missing_command(&action));
+                    }
+                };
                 Ok(serde_json::json!({
                     "command": command,
                     "timeoutSeconds": action.timeout_seconds,
@@ -2621,13 +2597,14 @@ impl AgentRuntime {
                 let count = search.references.len();
                 let added = search
                     .references
-                    .into_iter()
+                    .iter()
                     .filter(|reference| {
-                        push_unique_reference(references, events, event_sink, reference.clone())
+                        push_unique_reference(references, events, event_sink, (*reference).clone())
                     })
                     .count();
+                let top_results = format_search_results_block(&search.references, 5);
                 Ok(format!(
-                    "{count} result(s), {added} new, mode={}, tokenHits={}, vectorHits={}, graphHits={}",
+                    "{count} result(s), {added} new, mode={}, tokenHits={}, vectorHits={}, graphHits={}{top_results}",
                     search.mode, search.token_hits, search.vector_hits, search.graph_hits
                 ))
             }
@@ -2636,12 +2613,13 @@ impl AgentRuntime {
                     .map_err(|err| format!("Invalid {tool} result: {err}"))?;
                 let count = found.len();
                 let added = found
-                    .into_iter()
+                    .iter()
                     .filter(|reference| {
-                        push_unique_reference(references, events, event_sink, reference.clone())
+                        push_unique_reference(references, events, event_sink, (*reference).clone())
                     })
                     .count();
-                Ok(format!("{count} result(s), {added} new"))
+                let top_results = format_search_results_block(&found, 5);
+                Ok(format!("{count} result(s), {added} new{top_results}"))
             }
             "wiki.read_page" => {
                 let path = value
@@ -2649,9 +2627,22 @@ impl AgentRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or("wiki page");
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
+                let start_line = value.get("startLine").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let end_line = value.get("endLine").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let total_lines = value.get("totalLines").and_then(Value::as_u64).unwrap_or(0) as usize;
+                // Line-numbered content is already baked in by read_wiki_page
+                // (cat -n format). When offset/limit is used, the summary
+                // notes which slice was returned so the agent (and user)
+                // can request the next chunk without guessing.
+                let range_note = if start_line > 1 || (total_lines > 0 && end_line < total_lines) {
+                    format!(" [lines {}-{} of {}]", start_line, end_line, total_lines)
+                } else {
+                    String::new()
+                };
                 let mut summary = format!(
-                    "read {path}\n{}",
-                    trim_chars(&collapse_whitespace(content), 4_000)
+                    "read {path}{}\n{}",
+                    range_note,
+                    trim_chars(content, 6_000)
                 );
                 if let Some(context) = value
                     .get("knowledgeContext")
@@ -2671,7 +2662,7 @@ impl AgentRuntime {
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
                 Ok(format!(
                     "read {skill}:{path}\n{}",
-                    trim_chars(&collapse_whitespace(content), 4_000)
+                    trim_chars(content, 6_000)
                 ))
             }
             "wiki.write_page" => {
@@ -2768,14 +2759,91 @@ impl AgentRuntime {
                             .join("\n")
                     )
                 };
+                // stdout / stderr caps raised from 8K / 4K so scripts
+                // like `python -c "import os, re; ...; print(hits)"`
+                // that emit thousands of lines (e.g. walking a large
+                // package and grepping for a symbol) aren't truncated
+                // before the user can see the relevant hits.
                 Ok(format!(
                     "`{}` exit={:?} timedOut={}\nstdout:\n{}\nstderr:\n{}",
                     output.command,
                     output.exit_code,
                     output.timed_out,
-                    trim_chars(&output.stdout, 8_000),
-                    trim_chars(&output.stderr, 4_000)
+                    trim_chars(&output.stdout, 20_000),
+                    trim_chars(&output.stderr, 10_000)
                 ) + &generated_summary)
+            }
+            "wiki.edit_page" => {
+                let output: tools::WikiEditOutput = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid wiki.edit_page result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::FileChanged {
+                        path: output.reference.path.clone(),
+                        tool: "wiki.edit_page".to_string(),
+                        existed_before: true,
+                        previous_content: output.previous_content.clone(),
+                    },
+                );
+                let reference = output.reference.clone();
+                let path = reference.path.clone();
+                push_unique_reference(references, events, event_sink, reference);
+                Ok(format!(
+                    "edited {path} ({} replacement{})",
+                    output.replacements,
+                    if output.replacements == 1 { "" } else { "s" }
+                ))
+            }
+            "workspace.read_file" => {
+                let output: tools::WikiReadOutput = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid workspace.read_file result: {err}"))?;
+                Ok(format!(
+                    "read {} (lines {}-{} of {})",
+                    output.path,
+                    output.start_line,
+                    output.end_line,
+                    output.total_lines
+                ))
+            }
+            "workspace.edit_file" => {
+                let output: tools::WorkspaceEditOutput = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid workspace.edit_file result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::FileChanged {
+                        path: output.path.clone(),
+                        tool: "workspace.edit_file".to_string(),
+                        existed_before: output.existed_before,
+                        previous_content: output.previous_content.clone(),
+                    },
+                );
+                let reference = AgentReference {
+                    title: Path::new(&output.path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&output.path)
+                        .to_string(),
+                    path: output.path.clone(),
+                    kind: "workspace".to_string(),
+                    snippet: Some(format!(
+                        "Edited by Agent ({} bytes, {} replacement{}).",
+                        output.bytes,
+                        output.replacements,
+                        if output.replacements == 1 { "" } else { "s" }
+                    )),
+                    score: None,
+                    knowledge_context: None,
+                };
+                push_unique_reference(references, events, event_sink, reference);
+                Ok(format!(
+                    "edited {} ({} bytes, {} replacement{})",
+                    output.path,
+                    output.bytes,
+                    output.replacements,
+                    if output.replacements == 1 { "" } else { "s" }
+                ))
             }
             _ => Ok(value.to_string()),
         }
@@ -2816,6 +2884,8 @@ impl AgentRuntime {
             "source.search",
             "graph.search",
             "wiki.write_page",
+            "wiki.edit_page",
+            "wiki.read_page",
         ];
         if tools.web {
             available.push("web.search");
@@ -2826,13 +2896,15 @@ impl AgentRuntime {
         if skills_enabled {
             available.push("skill.read_file");
             available.push("workspace.write_file");
+            available.push("workspace.read_file");
+            available.push("workspace.edit_file");
             available.push("shell.exec");
         }
         let system = "You are an agent tool planner. Return only compact JSON. Do not explain.";
         let skill_context = render_skill_planner_context(skills, skill_mode);
         let workspace = agent_workspace_display(&self.project_path);
         let user = format!(
-            "User request:\n{message}\n\nSkill context:\n{skill_context}\n\nAvailable tools: {}\n\nAgent workspace for generated files: {workspace}\n\nReturn JSON exactly like {{\"toolCalls\":[{{\"tool\":\"wiki.search\",\"query\":\"short query\"}}]}}. Use an empty array when no tool is needed. The skill context and tool list above are already available to the assistant; do not call wiki.search, source.search, graph.search, web.search, anytxt.search, skill.read_file, workspace.write_file, or shell.exec merely to list, explain, or summarize the currently available skills, tools, modes, or agent capabilities. Use wiki.search for factual or topical retrieval. Prefer graph.search for relationships, dependencies, neighborhoods, backlinks, or connections between entities; pass concise entity or concept names instead of the full question. The planner may select both when the answer needs page content and graph structure. Prefer web.search only for current/external information. Prefer anytxt.search only for user files outside the wiki. Use wiki.write_page only when the user explicitly asks to create a wiki page; include path under wiki/ ending in .md and full Markdown content. Existing pages are create-only by default; include allowOverwrite:true only when the user explicitly asks to overwrite or update an existing wiki page. Use skill.read_file for Markdown/reference files inside an active skill directory. Use workspace.write_file for generated artifacts under agent-workspace; do not inline large heredocs or generated file bodies inside shell.exec. Use shell.exec only when a relevant active skill requires a command-line operation after any large files have been written. shell.exec runs from the Agent workspace; commands that generate files must write them under that workspace and must not write to home, Desktop, Downloads, system temp folders, hidden app metadata folders, or skill installation folders.",
+            "User request:\n{message}\n\nSkill context:\n{skill_context}\n\nAvailable tools: {}\n\nAgent workspace for generated files: {workspace}\n\nReturn JSON exactly like {{\"toolCalls\":[{{\"tool\":\"wiki.search\",\"query\":\"short query\"}}]}}. Use an empty array when no tool is needed. The skill context and tool list above are already available to the assistant; do not call wiki.search, source.search, graph.search, web.search, anytxt.search, skill.read_file, workspace.write_file, workspace.read_file, workspace.edit_file, or shell.exec merely to list, explain, or summarize the currently available skills, tools, modes, or agent capabilities. Use wiki.search for factual or topical retrieval. Prefer graph.search for relationships, dependencies, neighborhoods, backlinks, or connections between entities; pass concise entity or concept names instead of the full question. The planner may select both when the answer needs page content and graph structure. Prefer web.search only for current/external information. Prefer anytxt.search only for user files outside the wiki. Use wiki.write_page only when the user explicitly asks to create or rewrite a wiki page; include path under wiki/ ending in .md and full Markdown content. Existing pages are overwritten by default (ClaudeCode Write semantics); include allowOverwrite:false only when you specifically want a create-only guard. Use wiki.edit_page (old_string → new_string) to apply a targeted change to an existing wiki page — prefer this over wiki.write_page when only a few lines change. Use wiki.read_page for fetching a page body; it supports offset + limit (1-indexed) to paginate large pages. Use skill.read_file for Markdown/reference files inside an active skill directory. Use workspace.write_file for generated artifacts under agent-workspace; do not inline large heredocs or generated file bodies inside shell.exec. Use workspace.read_file / workspace.edit_file to inspect or patch generated scripts in agent-workspace. Use shell.exec only when a relevant active skill requires a command-line operation after any large files have been written. shell.exec runs from the Agent workspace; commands that generate files must write them under that workspace and must not write to home, Desktop, Downloads, system temp folders, hidden app metadata folders, or skill installation folders.",
             available.join(", "),
         );
         let client = LlmClient::new(config.clone())?
@@ -2848,6 +2920,97 @@ fn agent_structured_max_tokens(has_skills: bool) -> u32 {
     } else {
         AGENT_STRUCTURED_MAX_TOKENS
     }
+}
+
+/// Build the user-facing error for a `shell.exec` action that arrived
+/// without a non-empty `command` or `query`. Lists the field names the
+/// LLM actually populated (or `<none>`) so the user / debugger can see
+/// at a glance whether the model filled the wrong field (e.g. put the
+/// command under `path`) versus produced a fully-empty action.
+fn format_shell_exec_missing_command(action: &AgentLoopAction) -> String {
+    let received = [
+        ("command", action.command.is_some()),
+        ("query", action.query.is_some()),
+        ("path", action.path.is_some()),
+        ("content", action.content.is_some()),
+        ("title", action.title.is_some()),
+        ("skill", action.skill.is_some()),
+        ("fields", action.fields.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, present)| present.then(|| name))
+    .collect::<Vec<_>>()
+    .join(", ");
+    format!(
+        "shell.exec requires command (action had non-empty fields: [{}])",
+        if received.is_empty() {
+            "<none>".to_string()
+        } else {
+            received
+        }
+    )
+}
+
+/// Append a `[top results]` block listing up to N search hits as
+/// `N. title · path · score · snippet`. The Agent Activity feed and
+/// the click-to-expand detail panel share the same output string,
+/// so embedding the actual results here gives the user visible
+/// evidence of what the search returned instead of just a count line.
+///
+/// Snippet is truncated to 200 chars (multi-line collapses to single
+/// line) so a hit with a long abstract doesn't dominate the block.
+fn format_search_results_block(references: &[AgentReference], max: usize) -> String {
+    if references.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n[top results]");
+    for (i, reference) in references.iter().take(max).enumerate() {
+        let score = reference
+            .score
+            .map(|s| format!(" · score={:.2}", s))
+            .unwrap_or_default();
+        let snippet = reference
+            .snippet
+            .as_deref()
+            .map(|s| {
+                let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+                let truncated = truncate_chars(&flat, 200);
+                format!("\n  \"{}\"", truncated)
+            })
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "\n{}. {} · {}{}{}",
+            i + 1,
+            reference.title,
+            reference.path,
+            score,
+            snippet,
+        ));
+    }
+    out
+}
+
+/// Char-based string truncation with an ellipsis suffix when the
+/// input exceeds `max_chars`. Used by `format_search_results_block`
+/// to cap snippet previews so a single hit can't dominate the block.
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut count = 0usize;
+    let mut end = 0usize;
+    for (idx, _) in value.char_indices() {
+        if count == max_chars.saturating_sub(1) {
+            end = idx;
+            break;
+        }
+        count += 1;
+        end = idx;
+    }
+    if count < max_chars - 1 {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(end + 1);
+    out.push_str(&value[..end]);
+    out.push('…');
+    out
 }
 
 fn is_shell_approval_required_observation(observation: &AgentObservation) -> bool {
@@ -3376,10 +3539,11 @@ fn build_agent_loop_user(
     out.push_str("\n\nAvailable Agent tools for this turn:\n");
     if request.tools.wiki {
         out.push_str("- wiki.search: retrieve wiki pages for factual or topical questions.\n");
-        out.push_str("- wiki.read_page: read a specific wiki markdown page by path.\n");
+        out.push_str("- wiki.read_page: read a specific wiki markdown page by path. Supports optional offset + limit (1-indexed line numbers) for paginating large pages; response is line-numbered for use with wiki.edit_page.\n");
         out.push_str("- source.search: search raw source snippets.\n");
         out.push_str("- graph.search: retrieve relationships, neighbors, backlinks, dependencies, and connections between entities. Prefer it for relational questions and query with concise entity or concept names.\n");
-        out.push_str("- wiki.write_page: create a wiki markdown page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
+        out.push_str("- wiki.write_page: create or overwrite a Markdown wiki page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". Overwrites existing pages by default (ClaudeCode Write semantics); pass allowOverwrite=false for an explicit create-only guard. The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
+        out.push_str("- wiki.edit_page: apply a targeted string replacement to an existing wiki page (old_string → new_string). By default rejects ambiguous matches; pass replace_all=true to batch-replace. Prefer this over wiki.write_page when only a few lines change.\n");
     }
     if request.tools.web {
         out.push_str("- web.search: search external web sources.\n");
@@ -3409,9 +3573,17 @@ fn build_agent_loop_user(
             out.push_str("- user.ask: pause and show the user a structured form with single-choice, multi-choice, text, textarea, or confirmation fields when an active skill needs user input.\n");
             out.push_str("- workspace.write_file: write generated artifacts under agent-workspace by relative path. For large HTML/PPT, initialize the file and then append chunks.\n");
             out.push_str("- workspace.append_file: append content to a generated artifact under agent-workspace. Prefer this for large HTML/PPT after workspace.write_file.\n");
+            out.push_str("- workspace.read_file: read a file from agent-workspace by relative path. Same offset + limit semantics as wiki.read_page.\n");
+            out.push_str("- workspace.edit_file: apply a targeted string replacement to a file in agent-workspace (old_string → new_string). Same uniqueness rules as wiki.edit_page.\n");
         }
         if shell_listed {
             out.push_str("- shell.exec: run a shell command for code research, library introspection, or any command-line work the user asks for. Workspace-local commands run directly. With Enhanced shell mode enabled (the default in Settings), common dev tools (cat, head, grep, rg, sed, awk, find, jq, python, pip, uv, git, node, npm, cargo, go, etc.) also run without per-call prompts even when arguments reference external files; only network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), destructive system paths, and shell substitution always require approval. Prefer shell.exec over web.search when the user asks about a locally installed Python library (e.g. \"查一下本地的transformers库是否集成了X\") — use `python -c \"import inspect; ...\"` or `rg <symbol>` to read the on-disk source directly. Note: shell.exec no longer requires an active skill when Enhanced shell mode is on.\n");
+            out.push_str("\nTool action JSON schema — every tool call MUST use the field name listed below; filling the wrong field (e.g. putting the command under `path` or `content`) is rejected with `shell.exec requires command (action had non-empty fields: [...])`. Use `command` for shell commands, `query` for searches, `path` for file reads/writes:\n");
+            out.push_str("```json\n");
+            out.push_str("{\"action\":\"tool\",\"tool\":\"shell.exec\",\"command\":\"python -c \\\"import transformers; print(transformers.__version__)\\\"}\n");
+            out.push_str("{\"action\":\"tool\",\"tool\":\"wiki.search\",\"query\":\"transformers\"}\n");
+            out.push_str("{\"action\":\"tool\",\"tool\":\"wiki.read_page\",\"path\":\"wiki/transformers.md\"}\n");
+            out.push_str("```\n");
         }
     }
     if observations.is_empty() {
@@ -3451,10 +3623,16 @@ fn parse_agent_loop_action(raw: &str) -> AgentLoopAction {
     if looks_like_agent_tool_json(trimmed) {
         return AgentLoopAction {
             action: "invalid_tool_json".to_string(),
-            answer: Some(
-                "Invalid or truncated Agent tool JSON. Your previous response was cut off mid-string or missing required closing braces. Return one complete compact JSON object that fits in a single response. For large generated files, initialize with workspace.write_file and continue with workspace.append_file chunks instead of putting the whole file or heredocs in one JSON object. For large wiki pages, keep the markdown body short enough to fit in one JSON action, split the topic across multiple wiki/ pages, or use shell.exec with a heredoc to append additional content. Do not stuff an entire long page into one wiki.write_page content value."
-                    .to_string(),
-            ),
+            answer: Some(format!(
+                "Invalid or truncated Agent tool JSON. {diag} \
+                 Return one complete compact JSON object that fits in a single response. \
+                 Keep individual actions well under ~8 KB so the JSON comfortably fits in one model response — \
+                 anything larger risks token-limit truncation mid-string. \
+                 For large generated files, initialize with workspace.write_file and continue with workspace.append_file chunks instead of putting the whole file or heredocs in one JSON object. \
+                 For large wiki pages, keep the markdown body short enough to fit in one JSON action, split the topic across multiple wiki/ pages, or use shell.exec with a heredoc to append additional content. \
+                 Do not stuff an entire long page into one wiki.write_page content value.",
+                diag = diagnose_truncated_action(trimmed),
+            )),
             ..AgentLoopAction::default()
         };
     }
@@ -3474,6 +3652,178 @@ fn looks_like_agent_tool_json(value: &str) -> bool {
         && (trimmed.contains("\"action\"")
             || trimmed.contains("\"tool\"")
             || trimmed.contains("\"command\""))
+}
+
+/// Build a short diagnostic for an action JSON that failed to parse.
+/// Tells the next iteration's prompt what the model was attempting
+/// (tool name, last field being filled, total byte length, and tail
+/// state) so the retry knows whether to shrink a payload, switch
+/// tools, or fall back to a smaller chunk. Pure string scan — no
+/// JSON parsing, since parsing is exactly what just failed.
+fn diagnose_truncated_action(raw: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(format!("response length = {} bytes", raw.len()));
+    if let Some(tool) = extract_top_level_string_value(raw, "tool") {
+        parts.push(format!("attempted tool = {tool}"));
+    }
+    if let Some(field) = last_open_field_name(raw) {
+        parts.push(format!("last field being filled = \"{field}\""));
+    }
+    match detect_json_tail_state(raw) {
+        JsonTailState::UnterminatedString => parts.push("tail = unterminated string literal".to_string()),
+        JsonTailState::MissingClosingBrace => parts.push("tail = missing closing brace(s)".to_string()),
+        JsonTailState::UnexpectedToken => parts.push("tail = unexpected token".to_string()),
+        JsonTailState::LooksComplete => {}
+    }
+    format!("Diagnostic: {}", parts.join("; "))
+}
+
+/// Find the value of a top-level string field in the (possibly
+/// truncated) action JSON. Returns Some(value) if the field exists
+/// at the top level and its value parses as a JSON-style quoted
+/// string up to a closing quote. Falls back to None for nested,
+/// non-string, or missing fields.
+fn extract_top_level_string_value(raw: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let key_idx = raw.find(&needle)?;
+    let after_key = &raw[key_idx + needle.len()..];
+    // skip whitespace and the colon
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let mut chars = after_colon.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in chars {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            return Some(out);
+        }
+        out.push(ch);
+    }
+    // Ran out of input while still inside the string — that itself
+    // is the truncation signal; return what we decoded so far so the
+    // model sees a partial tool name in the diagnostic.
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Find the last `"<name>":` that appears before the truncation
+/// point, scanning backwards. Used to tell the model which field
+/// was being filled when the response was cut off (typically
+/// `content` for wiki.write_page, `answer` for final responses,
+/// `command` for shell.exec, `arguments` for MCP tools).
+fn last_open_field_name(raw: &str) -> Option<String> {
+    // Walk backwards looking for a `"name":` pattern. The field is
+    // "open" (still being filled) iff no closing quote for its
+    // value follows — but we approximate by checking that the last
+    // occurrence in the raw text has no terminated string after
+    // it. The approximation is fine because the truncation point
+    // is at the very end.
+    let bytes = raw.as_bytes();
+    let mut search_end = bytes.len();
+    while search_end > 0 {
+        // find the last `"` before search_end
+        let close_quote = bytes[..search_end].iter().rposition(|&b| b == b'"')?;
+        // find the matching `"` for the field name
+        let name_start_candidate = bytes[..close_quote].iter().rposition(|&b| b == b'"')?;
+        let name_bytes = &bytes[name_start_candidate + 1..close_quote];
+        // field name must be a valid identifier-ish (alnum + underscore)
+        if !name_bytes.is_empty()
+            && name_bytes.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            // check that this field isn't already closed (i.e. there's
+            // no closing quote + comma after its value yet)
+            let after = &bytes[close_quote + 1..];
+            if let Some(colon_offset) = after.iter().position(|&b| b == b':') {
+                let tail = &after[colon_offset + 1..];
+                if !looks_like_terminal_field_value(tail) {
+                    return Some(String::from_utf8_lossy(name_bytes).into_owned());
+                }
+            }
+        }
+        search_end = close_quote;
+    }
+    None
+}
+
+fn looks_like_terminal_field_value(tail: &[u8]) -> bool {
+    // A field whose value already terminated will look like `...,`
+    // or `...}` or whitespace+`,` / `}` in its tail. If instead the
+    // tail starts with a quote and is unterminated, this field is
+    // the one being filled.
+    let trimmed: Vec<u8> = tail.iter().copied().skip_while(|b| b.is_ascii_whitespace()).collect();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed[0] == b'"' {
+        // see if that string closes
+        let mut escaped = false;
+        for &b in &trimmed[1..] {
+            if escaped { escaped = false; continue; }
+            if b == b'\\' { escaped = true; continue; }
+            if b == b'"' { return true; }
+        }
+        return false;
+    }
+    // non-string value: check for `,` or `}` — if present, the
+    // field terminated cleanly
+    trimmed.iter().any(|&b| b == b',' || b == b'}')
+}
+
+#[derive(Debug)]
+enum JsonTailState {
+    LooksComplete,
+    UnterminatedString,
+    MissingClosingBrace,
+    UnexpectedToken,
+}
+
+fn detect_json_tail_state(raw: &str) -> JsonTailState {
+    let trimmed = raw.trim_end();
+    if trimmed.ends_with('}') {
+        return JsonTailState::LooksComplete;
+    }
+    // Walk back from the end, ignoring trailing whitespace, to find
+    // the last meaningful character.
+    let bytes = trimmed.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    if i == 0 {
+        return JsonTailState::UnexpectedToken;
+    }
+    let last = bytes[i - 1];
+    if last == b'"' {
+        // ends with a closing quote — could be complete value, but
+        // we already ruled out the whole-string-ending-with-} case.
+        // Likely the response was cut inside the string and the
+        // unterminated string literal is the open one before the
+        // last quote. Conservatively report missing brace.
+        return JsonTailState::MissingClosingBrace;
+    }
+    if last.is_ascii_alphabetic() || last.is_ascii_digit() {
+        // mid-token; likely the string content was truncated mid-line
+        return JsonTailState::UnterminatedString;
+    }
+    if last == b'{' || last == b'[' || last == b',' {
+        return JsonTailState::MissingClosingBrace;
+    }
+    JsonTailState::UnexpectedToken
 }
 
 fn normalize_agent_loop_action(mut action: AgentLoopAction) -> AgentLoopAction {
@@ -4014,17 +4364,22 @@ fn is_shell_command_allowed_without_prompt(
     project_path: &str,
     enhanced_mode: bool,
 ) -> bool {
-    // Hard deny gate when Enhanced shell mode is on: any command that hits
-    // `SHELL_DENY_TOKENS` or `SHELL_DENY_SUBSTRINGS` must always require an
-    // approval, regardless of safe-binary membership or workspace scope. We
-    // intentionally do NOT apply this gate when enhanced_mode is false, so
-    // the conservative path-scope check continues to behave exactly as
-    // before for users who opt out.
-    if enhanced_mode && shell_command_hits_deny_patterns(command) {
+    // A user-approved exact command is the only route through the manual
+    // approval boundary. It must be checked first so commands that were
+    // deliberately held for approval (network, privilege escalation, etc.)
+    // can execute after the user explicitly authorizes that exact string.
+    if is_shell_command_approved(command, approved) {
+        return true;
+    }
+
+    // These patterns always require explicit approval, regardless of Enhanced
+    // shell mode. They must be checked before either workspace scope or a safe
+    // binary can auto-allow the command.
+    if shell_command_hits_deny_patterns(command) {
         return false;
     }
-    is_shell_command_approved(command, approved)
-        || is_shell_command_scoped_to_agent_workspace(command, project_path)
+
+    is_shell_command_scoped_to_agent_workspace(command, project_path)
         || (enhanced_mode && shell_command_uses_safe_binary(command))
 }
 
@@ -4034,23 +4389,58 @@ fn is_shell_command_allowed_without_prompt(
 /// The deny-pattern gate is consulted separately via
 /// `shell_command_hits_deny_patterns`.
 fn shell_command_uses_safe_binary(command: &str) -> bool {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return false;
+    let programs = shell_command_program_tokens(command);
+    !programs.is_empty() && programs.iter().all(|program| {
+        let basename = std::path::Path::new(program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(program);
+        SHELL_SAFE_BINARIES.contains(&basename)
+    })
+}
+
+/// Extract the executable token at the beginning of every unquoted shell
+/// command segment. Arguments are intentionally ignored: `python -c "..."`
+/// is still a Python invocation, while `echo ok; sudo id` exposes both `echo`
+/// and `sudo` for safe-binary and deny-token checks.
+fn shell_command_program_tokens(command: &str) -> Vec<String> {
+    let mut programs = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut expecting_program = true;
+
+    for ch in command.chars() {
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            } else if expecting_program {
+                current.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            ch if matches!(ch, ';' | '|' | '&') => {
+                if expecting_program && !current.is_empty() {
+                    programs.push(std::mem::take(&mut current));
+                }
+                current.clear();
+                expecting_program = true;
+            }
+            ch if ch.is_whitespace() => {
+                if expecting_program && !current.is_empty() {
+                    programs.push(std::mem::take(&mut current));
+                    expecting_program = false;
+                }
+            }
+            _ if expecting_program => current.push(ch),
+            _ => {}
+        }
     }
-    let program_token = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_matches(|ch| matches!(ch, '"' | '\''));
-    if program_token.is_empty() {
-        return false;
+    if expecting_program && !current.is_empty() {
+        programs.push(current);
     }
-    let program_basename = std::path::Path::new(program_token)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program_token);
-    SHELL_SAFE_BINARIES.contains(&program_basename)
+    programs
 }
 
 /// True when `command` matches any of the hard-deny token or substring
@@ -4076,11 +4466,14 @@ fn shell_command_hits_deny_patterns(command: &str) -> bool {
     false
 }
 
-/// True when `token` appears as a separate whitespace-delimited word in
-/// `command_lower` (already lowercased by the caller). Avoids matching `curl`
-/// inside `curlie` or `scp` inside `scpwrap`.
+/// True when `token` appears as a shell token in `command_lower` (already
+/// lowercased by the caller). Shell operators are separators, so a chained
+/// command such as `echo ok;sudo id` cannot hide a denied executable behind a
+/// safe first binary.
 fn shell_command_contains_token(command_lower: &str, token: &str) -> bool {
-    command_lower.split_whitespace().any(|word| word == token)
+    shell_command_program_tokens(command_lower)
+        .iter()
+        .any(|word| word == token)
 }
 
 fn is_shell_command_scoped_to_agent_workspace(command: &str, project_path: &str) -> bool {
@@ -5623,6 +6016,30 @@ mod tests {
     }
 
     #[test]
+    fn diagnose_truncated_action_extracts_tool_and_open_field() {
+        // wiki.write_page attempt whose content field is still being filled.
+        let raw = r##"{"action":"tool","tool":"wiki.write_page","path":"wiki/x.md","content":"# Heading"##;
+        let diag = diagnose_truncated_action(raw);
+        assert!(diag.contains("wiki.write_page"), "tool name missing: {diag}");
+        assert!(
+            diag.contains("content"),
+            "open field 'content' missing: {diag}"
+        );
+        assert!(
+            diag.contains("bytes"),
+            "byte count missing: {diag}"
+        );
+    }
+
+    #[test]
+    fn diagnose_truncated_action_handles_final_answer_field() {
+        // final action whose answer field was being filled.
+        let raw = r##"{"action":"final","answer":"Here is what I found about MiniMax integration in transformers"##;
+        let diag = diagnose_truncated_action(raw);
+        assert!(diag.contains("answer"), "open field 'answer' missing: {diag}");
+    }
+
+    #[test]
     fn agent_structured_output_budget_expands_for_skill_turns() {
         assert_eq!(agent_structured_max_tokens(false), 8192);
         assert_eq!(agent_structured_max_tokens(true), 16384);
@@ -6504,19 +6921,19 @@ mod tests {
         let project = "/Users/test/Project";
 
         assert!(is_shell_command_allowed_without_prompt(
-            "cat ppt/index.html | head -100",
+            "cat ppt/index.html",
             &[],
             project,
             false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
-            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html | head -30",
+            "grep -n data-layout ppt/index.html",
             &[],
             project,
             false,
         ));
         assert!(is_shell_command_allowed_without_prompt(
-            "mkdir -p deck && node scripts/validate.js deck/index.html",
+            "node scripts/validate.js deck/index.html",
             &[],
             project,
             false,
@@ -6527,6 +6944,34 @@ mod tests {
             project,
             false,
         ));
+    }
+
+    #[test]
+    fn shell_chains_and_deny_patterns_require_explicit_approval() {
+        let project = "/Users/test/Project";
+        for command in [
+            "echo harmless;sudo id",
+            "env sudo id",
+            "command sudo id",
+            "sh -c 'sudo id'",
+            "env curl https://example.com/file",
+            "echo `id`",
+            "curl https://example.com/file",
+        ] {
+            assert!(
+                !is_shell_command_allowed_without_prompt(command, &[], project, true),
+                "expected `{command}` to require approval"
+            );
+            assert!(
+                is_shell_command_allowed_without_prompt(
+                    command,
+                    &[command.to_string()],
+                    project,
+                    true,
+                ),
+                "expected exact approval to allow `{command}`"
+            );
+        }
     }
 
     #[test]
@@ -6622,11 +7067,8 @@ mod tests {
     fn enhanced_mode_reading_protected_system_paths_still_requires_approval() {
         let project = "/Users/test/Project";
 
-        // These commands have no external-path tokens, so the conservative
-        // path-scope check ALLOWS them. Enhanced mode must DENY them via the
-        // protected-path deny substrings (/etc/, /boot/, /proc/, /sys/,
-        // C:\Windows) — closing the gap where the agent could otherwise
-        // silently read sensitive system files through `python -c "open(...)"`.
+        // Protected paths always require an explicit approval, even when
+        // Enhanced shell mode is disabled.
         for command in [
             // /etc/ — system config, must require approval even via python.
             "python -c \"open('/etc/passwd').read()\"",
@@ -6638,12 +7080,12 @@ mod tests {
             "python -c \"open('C:\\\\Windows\\\\System32\\\\config').read()\"",
         ] {
             assert!(
-                is_shell_command_allowed_without_prompt(command, &[], project, false),
-                "conservative scope happens to allow `{command}`; this is the gap enhanced mode closes"
+                !is_shell_command_allowed_without_prompt(command, &[], project, false),
+                "expected `{command}` to require approval with enhanced mode off"
             );
             assert!(
                 !is_shell_command_allowed_without_prompt(command, &[], project, true),
-                "expected `{command}` to require approval even with enhanced mode on"
+                "expected `{command}` to require approval with enhanced mode on"
             );
         }
     }
@@ -6710,30 +7152,22 @@ mod tests {
     }
 
     #[test]
-    fn enhanced_mode_disabled_preserves_existing_behavior() {
-        // Re-run the full battery of the conservative path-scope tests with
-        // enhanced_mode=false. Results must be byte-identical to today.
+    fn enhanced_mode_disabled_preserves_conservative_safe_commands() {
         let project = "/Users/test/Project";
 
-        // Commands the conservative scope accepts.
         for ok_cmd in [
-            "cat ppt/index.html | head -100",
-            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html | head -30",
-            "mkdir -p deck && node scripts/validate.js deck/index.html",
+            "cat ppt/index.html",
+            "grep -n data-layout /Users/test/Project/agent-workspace/ppt/index.html",
             "python -c \"import inspect; print(1)\"",
             "git log --oneline -10",
-            // The conservative scope happens to allow these — they have no
-            // external-path tokens. Enhanced mode closes that gap.
-            "python -c \"open('/etc/passwd').read()\"",
-            "sudo apt install curl",
         ] {
             assert!(
                 is_shell_command_allowed_without_prompt(ok_cmd, &[], project, false),
                 "conservative scope should still allow `{ok_cmd}`"
             );
         }
-        // Commands the conservative scope rejects (because they contain
-        // external-path tokens or network substrings).
+        // Commands that require approval because they contain external paths,
+        // privileged/network operations, or shell control syntax.
         for blocked_cmd in [
             "cat /Users/test/.agents/skills/skill/SKILL.md",
             "cp ~/Desktop/file.png images/file.png",

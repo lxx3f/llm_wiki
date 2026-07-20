@@ -226,6 +226,23 @@
     "removeSkill": "Remove {{name}}",
     "noSkillsAvailable": "No skills found. Add SKILL.md files under .llm-wiki/skills or your user skills folder.",
     "approveCommand": "Approve command",
+    "shellApproval": {
+      "title": "Review shell command",
+      "description": "Approving executes exactly the command below. Review it before choosing an action.",
+      "pending": "Shell command needs approval",
+      "viewDetails": "View details",
+      "commandLabel": "Command",
+      "approve": "Approve command",
+      "reject": "Reject",
+      "other": "Other",
+      "back": "Back",
+      "continueWithOther": "Continue with instructions",
+      "otherPlaceholder": "Describe how the Agent should continue instead…",
+      "otherInstructions": "Your instructions",
+      "approved": "Shell command approved; continuing",
+      "rejected": "Shell command rejected; it was not run",
+      "otherResolved": "Continuing with your instructions"
+    },
     "skillSources": {
       "project": "Project",
       "claude": "Claude",

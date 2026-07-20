@@ -120,11 +120,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                         .get("content")
                         .and_then(Value::as_str)
                         .ok_or_else(|| "wiki.write_page requires content".to_string())?;
+                    // Default to true (ClaudeCode Write semantics: the tool
+                    // is destructive by design). Pass allowOverwrite=false
+                    // explicitly to opt into a create-only guard. The
+                    // user-facing safety gate is the WikiWriteMode UI
+                    // confirmation, not this model-discipline flag.
                     let allow_overwrite = input
                         .get("allowOverwrite")
                         .or_else(|| input.get("allow_overwrite"))
                         .and_then(Value::as_bool)
-                        .unwrap_or(false);
+                        .unwrap_or(true);
                     serde_json::to_value(write_wiki_page_with_activity(
                         context.project_path,
                         path,
@@ -159,7 +164,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                         .map(str::trim)
                         .filter(|path| !path.is_empty())
                         .ok_or_else(|| "wiki.read_page requires path".to_string())?;
-                    let content = read_wiki_page(context.project_path, path)?;
+                    let offset = input.get("offset").and_then(Value::as_u64).map(|v| v as usize);
+                    let limit = input.get("limit").and_then(Value::as_u64).map(|v| v as usize);
+                    let read = read_wiki_page(context.project_path, path, offset, limit)?;
                     let normalized_path = normalize_rel_path(path);
                     let mut knowledge_context = build_knowledge_context_index(context.project_path)
                         .remove(&normalized_path);
@@ -169,11 +176,40 @@ impl ToolRegistry for BuiltinToolRegistry {
                         &mut knowledge_context,
                     );
                     serde_json::to_value(json!({
-                        "path": path,
-                        "content": content,
+                        "path": read.path,
+                        "content": read.content,
+                        "startLine": read.start_line,
+                        "endLine": read.end_line,
+                        "totalLines": read.total_lines,
                         "knowledgeContext": knowledge_context,
                     }))
                     .map_err(|err| format!("Failed to serialize wiki.read_page result: {err}"))
+                }
+                "wiki.edit_page" => {
+                    let path = input
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "wiki.edit_page requires path".to_string())?;
+                    let old_string = input
+                        .get("old_string")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "wiki.edit_page requires old_string".to_string())?;
+                    let new_string = input
+                        .get("new_string")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "wiki.edit_page requires new_string".to_string())?;
+                    let replace_all = input
+                        .get("replace_all")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    serde_json::to_value(edit_wiki_page_with_activity(
+                        context.project_path,
+                        path,
+                        old_string,
+                        new_string,
+                        replace_all,
+                    )?)
+                    .map_err(|err| format!("Failed to serialize wiki.edit_page result: {err}"))
                 }
                 "workspace.write_file" => {
                     let path = input
@@ -206,6 +242,49 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .map_err(|err| {
                         format!("Failed to serialize workspace.append_file result: {err}")
                     })
+                }
+                "workspace.read_file" => {
+                    let path = input
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|path| !path.is_empty())
+                        .ok_or_else(|| "workspace.read_file requires path".to_string())?;
+                    let offset = input.get("offset").and_then(Value::as_u64).map(|v| v as usize);
+                    let limit = input.get("limit").and_then(Value::as_u64).map(|v| v as usize);
+                    serde_json::to_value(read_workspace_file(
+                        context.project_path,
+                        path,
+                        offset,
+                        limit,
+                    )?)
+                    .map_err(|err| format!("Failed to serialize workspace.read_file result: {err}"))
+                }
+                "workspace.edit_file" => {
+                    let path = input
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "workspace.edit_file requires path".to_string())?;
+                    let old_string = input
+                        .get("old_string")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "workspace.edit_file requires old_string".to_string())?;
+                    let new_string = input
+                        .get("new_string")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "workspace.edit_file requires new_string".to_string())?;
+                    let replace_all = input
+                        .get("replace_all")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    serde_json::to_value(edit_workspace_file_with_activity(
+                        context.project_path,
+                        path,
+                        old_string,
+                        new_string,
+                        replace_all,
+                    )?)
+                    .map_err(|err| format!("Failed to serialize workspace.edit_file result: {err}"))
                 }
                 "source.search" => {
                     let query = tool_query(&input, "source.search")?.to_string();
@@ -265,7 +344,34 @@ impl ToolRegistry for BuiltinToolRegistry {
                         .get("command")
                         .or_else(|| input.get("query"))
                         .and_then(Value::as_str)
-                        .ok_or_else(|| "shell.exec requires command".to_string())?;
+                        .ok_or_else(|| {
+                            // Mirror the runtime.rs helper so the registry
+                            // path also surfaces which input keys were
+                            // actually present — helps debug tools that
+                            // invoke shell.exec via tool_registry.execute
+                            // (rather than the agent loop) and arrive
+                            // with the wrong field name.
+                            let received = [
+                                ("command", input.get("command").is_some()),
+                                ("query", input.get("query").is_some()),
+                                ("path", input.get("path").is_some()),
+                                ("content", input.get("content").is_some()),
+                                ("title", input.get("title").is_some()),
+                                ("skill", input.get("skill").is_some()),
+                            ]
+                            .into_iter()
+                            .filter_map(|(name, present)| present.then(|| name))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                            format!(
+                                "shell.exec requires command (input had fields: [{}])",
+                                if received.is_empty() {
+                                    "<none>".to_string()
+                                } else {
+                                    received
+                                }
+                            )
+                        })?;
                     let timeout_secs = input
                         .get("timeoutSeconds")
                         .or_else(|| input.get("timeout_seconds"))
@@ -314,6 +420,35 @@ pub struct WorkspaceWriteOutput {
     pub existed_before: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_content: Option<String>,
+}
+
+/// Output of `wiki.read_page` (and `workspace.read_file`). The
+/// `content` field is the file body with line numbers baked in
+/// (`   N\t...`) so subsequent `wiki.edit_page` / `workspace.edit_file`
+/// calls can quote exact substrings including whitespace. `start_line`
+/// / `end_line` / `total_lines` describe the slice returned so the
+/// agent can request the next chunk without re-counting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiReadOutput {
+    pub path: String,
+    pub content: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub total_lines: usize,
+}
+
+/// Output of `wiki.edit_page` and `workspace.edit_file`. Mirrors
+/// `WikiWriteOutput` (an AgentReference + optional rollback snapshot)
+/// plus the count of replacements applied — useful for verification
+/// when `replace_all=true` was passed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiEditOutput {
+    pub reference: AgentReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_content: Option<String>,
+    pub replacements: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,11 +569,21 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "wiki.read_page".to_string(),
-            description: "Read a project wiki markdown page by project-relative path.".to_string(),
+            description: "Read a project wiki markdown page by project-relative path. \
+                          Optionally paginate with offset + limit (1-indexed line numbers) for large pages. \
+                          The response is prefixed with `   N\\t` line numbers (cat -n style) so subsequent \
+                          wiki.edit_page calls can quote exact substrings including whitespace. \
+                          Without offset/limit the entire page is returned up to ~200 lines \
+                          (larger pages get truncated)."
+                .to_string(),
             effects: vec![ToolEffect::Read],
             parameters: Some(serde_json::json!({
                 "type": "object",
-                "properties": { "path": { "type": "string" } },
+                "properties": {
+                    "path":   { "type": "string", "description": "Project-relative wiki/ path, e.g. wiki/concepts/transformers.md" },
+                    "offset": { "type": "integer", "minimum": 1, "description": "Optional. 1-indexed start line. Defaults to 1." },
+                    "limit":  { "type": "integer", "minimum": 1, "description": "Optional. Number of lines to return. Defaults to 200." }
+                },
                 "required": ["path"]
             })),
         },
@@ -519,7 +664,11 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "wiki.write_page".to_string(),
             description:
-                "Create or overwrite a Markdown wiki page under wiki/ with project-bound path checks. The path MUST start with \"wiki/\" and end with \".md\"; otherwise the call is rejected. Existing files require allowOverwrite=true. For long pages that may exceed a single model response, write a smaller initial page with wiki.write_page, then keep extending it with shell.exec + cat >> (the workspace heredoc pattern). Do not put an entire long Markdown page in one wiki.write_page content field."
+                "Create or overwrite a Markdown wiki page under wiki/. The path MUST start with \"wiki/\" and end with \".md\"; otherwise the call is rejected. \
+                 By default, existing files ARE overwritten (ClaudeCode Write semantics — destructive by design). \
+                 Pass allowOverwrite=false only when you specifically want a create-only guard. \
+                 For long pages that may exceed a single model response, write a smaller initial page with wiki.write_page, then keep extending it with shell.exec + cat >> (the workspace heredoc pattern). \
+                 Do not put an entire long Markdown page in one wiki.write_page content field."
                     .to_string(),
             effects: vec![ToolEffect::Write],
             parameters: Some(serde_json::json!({
@@ -532,10 +681,31 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                     "content": { "type": "string" },
                     "allowOverwrite": {
                         "type": "boolean",
-                        "description": "Defaults to false. Set true only when the user explicitly asks to overwrite an existing wiki page."
+                        "description": "Defaults to true (overwrite existing page). Set to false only when you specifically want a create-only guard."
                     }
                 },
                 "required": ["path", "content"]
+            })),
+        },
+        ToolSpec {
+            name: "wiki.edit_page".to_string(),
+            description:
+                "Apply a targeted string replacement to a wiki markdown page (ClaudeCode Edit semantics). \
+                 old_string must match exactly; new_string replaces it. \
+                 By default the edit is REJECTED when old_string appears more than once — pass replace_all=true to batch-replace every occurrence. \
+                 The file is read in full, edited, and rewritten atomically; an Undo version is recorded. \
+                 Prefer this over wiki.write_page when you only need to change a few lines."
+                    .to_string(),
+            effects: vec![ToolEffect::Write],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path":        { "type": "string", "description": "Project-relative wiki/ path (same constraints as wiki.write_page)." },
+                    "old_string":  { "type": "string", "description": "Exact substring to replace. Must appear at least once." },
+                    "new_string":  { "type": "string", "description": "Replacement text." },
+                    "replace_all": { "type": "boolean", "description": "Default false. When true, replace every occurrence; when false (default), reject if old_string appears more than once." }
+                },
+                "required": ["path", "old_string", "new_string"]
             })),
         },
         ToolSpec {
@@ -574,7 +744,10 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "workspace.write_file".to_string(),
             description:
-                "Write a generated artifact file under the visible agent-workspace directory."
+                "Write or overwrite a generated artifact file under the visible agent-workspace directory. \
+                 Use this for any output file the user should see (HTML reports, SVG/PNG cover images, generated scripts, downloaded data dumps). \
+                 For LARGE files (over ~6 KB of content), initialize with workspace.write_file and then continue with one or more workspace.append_file chunks instead of stuffing the whole thing into one write — a single content field that exceeds the model's token limit gets truncated mid-string. \
+                 Generated scripts in agent-workspace can be invoked from shell.exec (`python script.py`, `bash run.sh`)."
                     .to_string(),
             effects: vec![ToolEffect::Write],
             parameters: Some(serde_json::json!({
@@ -592,7 +765,7 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "workspace.append_file".to_string(),
             description:
-                "Append generated artifact content under agent-workspace. Use after workspace.write_file for large HTML/PPT files."
+                "Append content to an existing generated artifact under agent-workspace. Use after workspace.write_file for large HTML/PPT files or any content that would not fit in one model response. Each call adds one chunk; iterate until the file is complete."
                     .to_string(),
             effects: vec![ToolEffect::Write],
             parameters: Some(serde_json::json!({
@@ -608,16 +781,69 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
             })),
         },
         ToolSpec {
+            name: "workspace.read_file".to_string(),
+            description:
+                "Read a file from agent-workspace by relative path. \
+                 Same offset/limit + line-number semantics as wiki.read_page. \
+                 Use this to inspect generated scripts before running them with shell.exec, \
+                 or to verify multi-chunk writes before invoking the script."
+                    .to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path":   { "type": "string", "description": "Relative path under agent-workspace. Same constraints as workspace.write_file." },
+                    "offset": { "type": "integer", "minimum": 1, "description": "Optional. 1-indexed start line. Defaults to 1." },
+                    "limit":  { "type": "integer", "minimum": 1, "description": "Optional. Number of lines to return. Defaults to 200." }
+                },
+                "required": ["path"]
+            })),
+        },
+        ToolSpec {
+            name: "workspace.edit_file".to_string(),
+            description:
+                "Apply a targeted string replacement to a file in agent-workspace (ClaudeCode Edit semantics for workspace files). \
+                 Same uniqueness rules as wiki.edit_page: old_string must match exactly; the edit is rejected when \
+                 old_string appears more than once unless replace_all=true. \
+                 Use to fix a small bug in a generated script or update a template token without rewriting the whole file."
+                    .to_string(),
+            effects: vec![ToolEffect::Write],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path":        { "type": "string", "description": "Relative path under agent-workspace. Same constraints as workspace.write_file." },
+                    "old_string":  { "type": "string", "description": "Exact substring to replace. Must appear at least once." },
+                    "new_string":  { "type": "string", "description": "Replacement text." },
+                    "replace_all": { "type": "boolean", "description": "Default false. When true, replace every occurrence; when false (default), reject if old_string appears more than once." }
+                },
+                "required": ["path", "old_string", "new_string"]
+            })),
+        },
+        ToolSpec {
             name: "shell.exec".to_string(),
             description:
-                "Run a project-scoped shell command requested by an active skill instruction."
+                "Run a shell command for code research, library introspection, or any command-line work the user asks for. \
+                 The process runs with cwd = <project>/agent-workspace/ — use relative paths to reference project files. \
+                 Field name in the action JSON MUST be `command` (not `path` / `content` / `query`). \
+                 For Enhanced shell mode (the default in Settings): common dev tools (cat, head, grep, rg, sed, awk, find, jq, python, pip, uv, git, node, npm, cargo, go, etc.) are auto-approved even when arguments point to site-packages or other external paths; only network clients (curl, wget, ssh, scp), privilege escalation (sudo, doas), destructive system paths, and shell substitution ($() / backticks) always require explicit approval. \
+                 PAYLOAD SIZE: keep the `command` string well under ~8 KB. Commands larger than that risk getting truncated mid-string by the model's token limit, which surfaces as \"Invalid or truncated Agent tool JSON\" — not a permission error. \
+                 FOR LARGE SCRIPTS: do not inline multi-line Python or shell scripts in the `command` field. Write the script to agent-workspace via workspace.write_file first (e.g. `scripts/inspect.py`), then call shell.exec with `python scripts/inspect.py` or `bash scripts/run.sh`. This both fits the budget and lets you iterate on the script across iterations. \
+                 USEFUL PATTERNS: `python -c \"import transformers; print(transformers.__file__)\"` to locate a package; `rg -l <symbol> <path>` to find files; `python -c \"import inspect; print(inspect.getsource(symbol))\"` to dump a class/function definition; pipe through `head`, `awk`, `jq` to trim large outputs to what matters."
                     .to_string(),
             effects: vec![ToolEffect::Read, ToolEffect::Process],
             parameters: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string" },
-                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": SHELL_EXEC_TIMEOUT_SECS }
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to run. Use `command`, not `path` / `content` / `query`. Keep well under ~8 KB; for multi-line scripts, write the script to a workspace file first and invoke it."
+                    },
+                    "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": SHELL_EXEC_TIMEOUT_SECS,
+                        "description": "Optional. Defaults to 30s. Raise for known long-running commands (e.g. package builds)."
+                    }
                 },
                 "required": ["command"]
             })),
@@ -821,6 +1047,28 @@ fn resolve_workspace_write_target(
             .map_err(|err| format!("{tool_name} failed to create directory: {err}"))?;
         ensure_project_bound_path(project_path, parent)?;
     }
+    Ok((rel, path))
+}
+
+/// Resolve a workspace-relative read path. Same path constraints as
+/// `resolve_workspace_write_target` (no `..`, no symlinks, no `wiki/`
+/// / `raw/` prefix) but does NOT create missing directories — read
+/// fails fast if the target doesn't exist.
+fn resolve_workspace_read_target(
+    project_path: &str,
+    rel_path: &str,
+    tool_name: &str,
+) -> Result<(String, PathBuf), String> {
+    let rel = normalize_workspace_write_path(rel_path)
+        .map_err(|err| err.replace("workspace.write_file", tool_name))?;
+    let project = Path::new(project_path);
+    if !project.is_dir() {
+        return Err(format!("{tool_name} project directory is not available"));
+    }
+    let workspace = agent_workspace_path(project);
+    ensure_project_bound_path(project_path, &workspace)?;
+    let path = workspace.join(&rel);
+    ensure_project_bound_path(project_path, &path)?;
     Ok((rel, path))
 }
 
@@ -2316,7 +2564,19 @@ fn extract_frontmatter_list(content: &str, key: &str) -> Vec<String> {
     Vec::new()
 }
 
-pub fn read_wiki_page(project_path: &str, rel_path: &str) -> Result<String, String> {
+/// Read a wiki markdown page, optionally paginated by 1-indexed line
+/// range. Returns `WikiReadOutput` whose `content` is the file body
+/// prefixed with `   N\t` line numbers (cat -n style) so subsequent
+/// `wiki.edit_page` calls can quote exact substrings including
+/// whitespace. `offset` defaults to 1 (start of file); `limit`
+/// defaults to 200 lines, which is roughly the 6 KB activity-feed cap
+/// once line numbers are baked in.
+pub fn read_wiki_page(
+    project_path: &str,
+    rel_path: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<WikiReadOutput, String> {
     let rel = normalize_rel_path(rel_path);
     if !is_public_read_rel(&rel) || !rel.to_ascii_lowercase().starts_with("wiki/") {
         return Err("wiki.read_page path must stay under wiki/".to_string());
@@ -2327,9 +2587,224 @@ pub fn read_wiki_page(project_path: &str, rel_path: &str) -> Result<String, Stri
         return Err("wiki.read_page path is not a file".to_string());
     }
     if meta.len() as usize > MAX_READ_PAGE_BYTES {
-        return Err("wiki.read_page file is too large".to_string());
+        return Err("wiki.read_page file is too large (hard cap)".to_string());
     }
-    fs::read_to_string(path).map_err(|err| format!("Failed to read wiki page: {err}"))
+    let raw = fs::read_to_string(&path).map_err(|err| format!("Failed to read wiki page: {err}"))?;
+    let (start_line, end_line, body) = number_lines(&raw, offset, limit);
+    Ok(WikiReadOutput {
+        path: rel,
+        content: body,
+        start_line,
+        end_line,
+        total_lines: raw.split('\n').count(),
+    })
+}
+
+/// Read a file from agent-workspace. Mirrors `read_wiki_page`
+/// semantics (1-indexed offset/limit, cat -n line numbers) but
+/// enforces the workspace-write path constraints so the agent cannot
+/// read outside `agent-workspace/`, symlinks, or `wiki/` / `raw/`.
+pub fn read_workspace_file(
+    project_path: &str,
+    rel_path: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<WikiReadOutput, String> {
+    let (rel, path) =
+        resolve_workspace_read_target(project_path, rel_path, "workspace.read_file")?;
+    let meta = fs::metadata(&path).map_err(|err| format!("Failed to read file metadata: {err}"))?;
+    if !meta.is_file() {
+        return Err("workspace.read_file path is not a file".to_string());
+    }
+    if meta.len() as usize > MAX_WORKSPACE_WRITE_BYTES {
+        return Err("workspace.read_file file is too large (hard cap)".to_string());
+    }
+    let raw = fs::read_to_string(&path).map_err(|err| format!("Failed to read file: {err}"))?;
+    let (start_line, end_line, body) = number_lines(&raw, offset, limit);
+    Ok(WikiReadOutput {
+        path: format!("{AGENT_WORKSPACE_DIR}/{rel}"),
+        content: body,
+        start_line,
+        end_line,
+        total_lines: raw.split('\n').count(),
+    })
+}
+
+/// Apply a targeted string replacement to a wiki markdown page
+/// (ClaudeCode Edit semantics). `old_string` must appear at least
+/// once; with `replace_all=false` (default), exactly one match is
+/// required. On success the file is rewritten atomically and an
+/// undo version is recorded via `record_file_version`.
+pub(crate) fn edit_wiki_page_with_activity(
+    project_path: &str,
+    rel_path: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<WikiEditOutput, String> {
+    if old_string.is_empty() {
+        return Err("wiki.edit_page old_string must not be empty".to_string());
+    }
+    let rel = normalize_wiki_write_path(rel_path)?;
+    let path = safe_project_join(project_path, &rel)?;
+    if !path.is_file() {
+        return Err(format!("wiki.edit_page target does not exist: {rel}"));
+    }
+    let original = fs::read_to_string(&path)
+        .map_err(|err| format!("Failed to read wiki page for edit: {err}"))?;
+    let matches = original.matches(old_string).count();
+    if matches == 0 {
+        return Err(format!(
+            "wiki.edit_page old_string not found in {rel} — check whitespace and exact text"
+        ));
+    }
+    if matches > 1 && !replace_all {
+        return Err(format!(
+            "wiki.edit_page old_string matches {matches} non-unique locations in {rel}; pass replace_all=true to batch-replace, or supply more surrounding context to make the old_string unique"
+        ));
+    }
+    let updated = if replace_all {
+        original.replace(old_string, new_string)
+    } else {
+        original.replacen(old_string, new_string, 1)
+    };
+    if updated.len() > MAX_WRITE_PAGE_BYTES {
+        return Err("wiki.edit_page would exceed wiki page size cap".to_string());
+    }
+    let previous_content = workspace_rollback_snapshot(&path);
+    crate::commands::file_history::record_file_version(
+        &path,
+        "baseline",
+        "before.wiki.edit_page",
+    );
+    fs::write(&path, &updated)
+        .map_err(|err| format!("Failed to write wiki page after edit: {err}"))?;
+    crate::commands::file_history::record_file_version(&path, "agent", "wiki.edit_page");
+    Ok(WikiEditOutput {
+        reference: AgentReference {
+            title: extract_markdown_title(&updated).unwrap_or_else(|| {
+                Path::new(&rel)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Wiki page")
+                    .replace('-', " ")
+            }),
+            path: rel.clone(),
+            kind: "wiki".to_string(),
+            snippet: Some(trim_text(&collapse_markdown_preview(&updated), 500))
+                .filter(|value| !value.trim().is_empty()),
+            score: None,
+            knowledge_context: None,
+        },
+        previous_content,
+        replacements: matches,
+    })
+}
+
+/// Apply a targeted string replacement to a file in agent-workspace
+/// (ClaudeCode Edit semantics for workspace files). Same uniqueness
+/// rules and Undo recording as `edit_wiki_page_with_activity`.
+pub(crate) fn edit_workspace_file_with_activity(
+    project_path: &str,
+    rel_path: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<WorkspaceEditOutput, String> {
+    if old_string.is_empty() {
+        return Err("workspace.edit_file old_string must not be empty".to_string());
+    }
+    let (rel, path) =
+        resolve_workspace_write_target(project_path, rel_path, "workspace.edit_file")?;
+    if path
+        .symlink_metadata()
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err("workspace.edit_file refuses to overwrite a symlink".to_string());
+    }
+    if !path.is_file() {
+        return Err(format!("workspace.edit_file target does not exist: {rel}"));
+    }
+    let original = fs::read_to_string(&path)
+        .map_err(|err| format!("Failed to read workspace file for edit: {err}"))?;
+    let matches = original.matches(old_string).count();
+    if matches == 0 {
+        return Err(format!(
+            "workspace.edit_file old_string not found in {rel} — check whitespace and exact text"
+        ));
+    }
+    if matches > 1 && !replace_all {
+        return Err(format!(
+            "workspace.edit_file old_string matches {matches} non-unique locations in {rel}; pass replace_all=true to batch-replace, or supply more surrounding context to make the old_string unique"
+        ));
+    }
+    let updated = if replace_all {
+        original.replace(old_string, new_string)
+    } else {
+        original.replacen(old_string, new_string, 1)
+    };
+    if updated.len() > MAX_WORKSPACE_WRITE_BYTES {
+        return Err("workspace.edit_file would exceed workspace size cap".to_string());
+    }
+    let existed_before = true;
+    let previous_content = workspace_rollback_snapshot(&path);
+    crate::commands::file_history::record_file_version(
+        &path,
+        "baseline",
+        "before.workspace.edit_file",
+    );
+    fs::write(&path, &updated)
+        .map_err(|err| format!("workspace.edit_file failed: {err}"))?;
+    crate::commands::file_history::record_file_version(&path, "agent", "workspace.edit_file");
+    Ok(WorkspaceEditOutput {
+        path: format!("{AGENT_WORKSPACE_DIR}/{rel}"),
+        bytes: updated.len(),
+        existed_before,
+        previous_content,
+        replacements: matches,
+    })
+}
+
+/// Output of `workspace.edit_file`. Mirrors `WorkspaceWriteOutput`
+/// (path / bytes / existed_before / rollback snapshot) plus the
+/// replacement count for verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEditOutput {
+    pub path: String,
+    pub bytes: usize,
+    #[serde(default)]
+    pub existed_before: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_content: Option<String>,
+    pub replacements: usize,
+}
+
+/// Format a string slice as `   N\t<line>` lines and return the
+/// `(start_line, end_line, body)` triple for `WikiReadOutput`. Shared
+/// by `read_wiki_page` and `read_workspace_file` so the cat -n
+/// format is identical across both tools. Default slice size is 200
+/// lines — keeps the body under ~6 KB once line-number prefixes
+/// are added, matching the activity-feed `trim_chars` cap.
+fn number_lines(raw: &str, offset: Option<usize>, limit: Option<usize>) -> (usize, usize, String) {
+    let lines: Vec<&str> = raw.split('\n').collect();
+    let total = lines.len();
+    if total == 0 {
+        return (1, 1, String::new());
+    }
+    // 1-indexed: offset=3 means start at line 3 inclusive.
+    let start_idx = offset.unwrap_or(1).saturating_sub(1).min(total - 1);
+    let default_take = 200usize.min(total - start_idx);
+    let take = limit.unwrap_or(default_take);
+    let end_idx = (start_idx + take).min(total);
+    let body = lines[start_idx..end_idx]
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| format!("{:>5}\t{}", start_idx + idx + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (start_idx + 1, end_idx, body)
 }
 
 pub fn search_graph(
@@ -2760,11 +3235,30 @@ fn url_encode(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use uuid::Uuid;
 
     use super::*;
+
+    /// Per-test scratch directory under std::env::temp_dir(); the project
+    /// path doesn't need to exist on disk for path-validation tests, but
+    /// the wiki subdirectory is materialised where tests write files.
+    fn fresh_project_dir(label: &str) -> PathBuf {
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = env::temp_dir().join(format!(
+            "llm-wiki-tools-{label}-{}-{}",
+            std::process::id(),
+            n
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn builtin_tool_specs_include_expected_tools() {
@@ -2774,21 +3268,137 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"wiki.search".to_string()));
         assert!(names.contains(&"wiki.read_page".to_string()));
+        assert!(names.contains(&"wiki.write_page".to_string()));
+        assert!(names.contains(&"wiki.edit_page".to_string()));
         assert!(names.contains(&"source.search".to_string()));
         assert!(names.contains(&"graph.search".to_string()));
         assert!(names.contains(&"anytxt.search".to_string()));
-        assert!(names.contains(&"wiki.write_page".to_string()));
         assert!(names.contains(&"llm.generate".to_string()));
         assert!(names.contains(&"skills.load".to_string()));
         assert!(names.contains(&"skill.read_file".to_string()));
         assert!(names.contains(&"workspace.write_file".to_string()));
         assert!(names.contains(&"workspace.append_file".to_string()));
+        assert!(names.contains(&"workspace.read_file".to_string()));
+        assert!(names.contains(&"workspace.edit_file".to_string()));
         assert!(names.contains(&"shell.exec".to_string()));
     }
 
     #[test]
+    fn wiki_edit_page_unique_match_replaces_once() {
+        let dir = fresh_project_dir("edit-unique");
+        let wiki_dir = dir.join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        let path = wiki_dir.join("notes.md");
+        fs::write(&path, "alpha\nbeta\ngamma\ndelta\n").unwrap();
+        let output =
+            edit_wiki_page_with_activity(dir.to_str().unwrap(), "wiki/notes.md", "beta", "BETA", false).unwrap();
+        assert_eq!(output.replacements, 1);
+        let updated = fs::read_to_string(&path).unwrap();
+        assert_eq!(updated, "alpha\nBETA\ngamma\ndelta\n");
+    }
+
+    #[test]
+    fn wiki_edit_page_ambiguous_match_rejected_without_replace_all() {
+        let dir = fresh_project_dir("edit-ambiguous");
+        let wiki_dir = dir.join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        fs::write(wiki_dir.join("dup.md"), "x\nx\n").unwrap();
+        let err = edit_wiki_page_with_activity(
+            dir.to_str().unwrap(),
+            "wiki/dup.md",
+            "x",
+            "y",
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("non-unique"), "err was: {err}");
+    }
+
+    #[test]
+    fn wiki_edit_page_replace_all_batch_replaces() {
+        let dir = fresh_project_dir("edit-replace-all");
+        let wiki_dir = dir.join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        fs::write(wiki_dir.join("multi.md"), "x\nx\nx\n").unwrap();
+        let output = edit_wiki_page_with_activity(
+            dir.to_str().unwrap(),
+            "wiki/multi.md",
+            "x",
+            "y",
+            true,
+        )
+        .unwrap();
+        assert_eq!(output.replacements, 3);
+        assert_eq!(fs::read_to_string(wiki_dir.join("multi.md")).unwrap(), "y\ny\ny\n");
+    }
+
+    #[test]
+    fn wiki_edit_page_empty_old_string_rejected() {
+        let dir = fresh_project_dir("edit-empty");
+        let wiki_dir = dir.join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        fs::write(wiki_dir.join("x.md"), "anything").unwrap();
+        let err = edit_wiki_page_with_activity(
+            dir.to_str().unwrap(),
+            "wiki/x.md",
+            "",
+            "new",
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("must not be empty"), "err was: {err}");
+    }
+
+    #[test]
+    fn wiki_edit_page_missing_target_rejected() {
+        let dir = fresh_project_dir("edit-missing");
+        let wiki_dir = dir.join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        let err = edit_wiki_page_with_activity(
+            dir.to_str().unwrap(),
+            "wiki/missing.md",
+            "x",
+            "y",
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("does not exist"), "err was: {err}");
+    }
+
+    #[test]
+    fn wiki_read_page_offset_limit_returns_line_numbered_slice() {
+        let dir = fresh_project_dir("read-offset");
+        let wiki_dir = dir.join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        fs::write(wiki_dir.join("p.md"), "a\nb\nc\nd\ne\n").unwrap();
+        let output =
+            read_wiki_page(dir.to_str().unwrap(), "wiki/p.md", Some(2), Some(2)).unwrap();
+        assert_eq!(output.start_line, 2);
+        assert_eq!(output.end_line, 3);
+        // Trailing newline makes split('\n') produce 6 elements (a, b, c, d, e, "").
+        assert_eq!(output.total_lines, 6);
+        assert!(output.content.starts_with("    2\tb"), "content was: {:?}", output.content);
+        assert!(output.content.contains("    3\tc"));
+        assert!(!output.content.contains("    4\td"), "should not include line 4 with limit=2");
+    }
+
+    #[test]
+    fn workspace_read_file_rejects_path_outside_workspace() {
+        let dir = fresh_project_dir("ws-read-escape");
+        // workspace path validation rejects ../ traversal
+        let err = read_workspace_file(
+            dir.to_str().unwrap(),
+            "../escape.txt",
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("workspace"), "err was: {err}");
+    }
+
+    #[test]
     fn read_wiki_page_rejects_traversal() {
-        let err = read_wiki_page("/tmp/project", "../secret.md").unwrap_err();
+        let err = read_wiki_page("/tmp/project", "../secret.md", None, None).unwrap_err();
         assert!(err.contains("wiki.read_page"));
     }
 

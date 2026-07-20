@@ -128,3 +128,12 @@ export interface ChatPendingWikiWrite {
   content: string
   existedBefore: boolean
 }
+
+export interface ChatShellCommandApproval {
+  /** Exact command presented at the authorization boundary. */
+  command: string
+  decision: "approved" | "rejected" | "other"
+  decidedAt: number
+  /** User-supplied alternative direction for the "Other" decision. */
+  instructions?: string
+}

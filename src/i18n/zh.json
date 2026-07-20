@@ -226,6 +226,23 @@
     "removeSkill": "移除 {{name}}",
     "noSkillsAvailable": "未找到 Skill。可在 .llm-wiki/skills 或用户级 skills 目录中添加 SKILL.md。",
     "approveCommand": "批准命令",
+    "shellApproval": {
+      "title": "审阅 Shell 命令",
+      "description": "同意后将精确执行下方的命令。请先审阅命令，再选择操作。",
+      "pending": "Shell 命令需要授权",
+      "viewDetails": "查看详情",
+      "commandLabel": "命令",
+      "approve": "同意执行",
+      "reject": "拒绝",
+      "other": "其他",
+      "back": "返回",
+      "continueWithOther": "按补充说明继续",
+      "otherPlaceholder": "说明 Agent 应改用什么方式继续……",
+      "otherInstructions": "你的补充说明",
+      "approved": "已同意 Shell 命令，正在继续",
+      "rejected": "已拒绝 Shell 命令；未执行",
+      "otherResolved": "正在按你的补充说明继续"
+    },
     "skillSources": {
       "project": "项目",
       "claude": "Claude",

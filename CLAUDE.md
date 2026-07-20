@@ -83,10 +83,10 @@ GitHub CI 当前只验证前端、MCP 和 Rust 能构建，不运行上述测试
 
 用户创建的每个 wiki 都是一个普通目录，而不是应用数据库：
 
-- `purpose.md`、`schema.md` 定义知识库目标与生成规则。
+- `purpose.md`、`schema.md` 定义知识库目标与生成规则。`schema.md` 是运行时注入的 Markdown 真源：可选 `schemaVersion` YAML frontmatter + `## Page Types` 表；后端 Agent 与 ingest 都会读到，编译错误会以 diagnostics 形式出现在 schema audit 中。
 - `raw/sources/` 保存不可变原始资料；不要直接改写其中的文件。
 - `wiki/` 保存生成的 Markdown 页面、`index.md`、`log.md` 和 `overview.md`。页面使用 YAML frontmatter 和 `[[wikilinks]]`。
-- `.llm-wiki/` 保存项目级运行状态，包括摄入队列、聊天、Review、文件同步快照、LanceDB 和项目 skills。
+- `.llm-wiki/` 保存项目级运行状态，包括摄入队列、聊天、Review、文件同步快照、LanceDB、项目 skills、**Schema 提案/审计/历史（`schema/`）**、**Memory 存储（`memory/`）**。
 - `agent-workspace/` 保存 Chat Agent 生成物。
 
 全局应用配置不在项目目录中，而在 Tauri app data 下的 `app-state.json`。API server 会直接读取其中的配置字段并短暂缓存，因此重命名全局配置键时必须同步检查 Rust API 读取逻辑。
@@ -139,6 +139,32 @@ LLM Wiki 同时作为 **外部 MCP 的 client**：在 Settings → External MCP 
 - 调用约束：`Cargo.toml` 增加 `rmcp 2.2` 的 `client + transport-child-process`；不要自行实现 JSON-RPC；不要把 API key 写进 `args`，只能从 `environment` 注入；不要把密钥写入日志/会话/event；超时与输出截断使用每个 server 的 `limits`。
 - 测试：`src-tauri/tests/fixtures/mock_mcp_server.py` 是可在 stdio 上跑 `initialize/list/call` 的 Python fixture；agent/mcp_client 模块的 7 个单元/集成测试当前全部通过。
 - 设计文档：`docs/superpowers/specs/2026-07-16-external-mcp-and-ui-ux.md`。
+
+### Schema 演进（受控提案）
+
+`schema.md` 不再是「固定在提示词里」的内容；它是运行时注入的 Markdown 真源。第一版采用「提案 → 确认 → 应用 → 影响审计」流程，不会自动迁移已有 Wiki 页面。
+
+- 编译器：`src/lib/wiki-schema.ts` 暴露 `compileProjectWikiSchema()`、`analyzeWikiSchemaImpact()`、`validateWikiPageRouting()`；诊断覆盖缺失 `## Page Types`、非法 type/目录、重复 type/目录、保留类型等，UI 通过 `WikiSchemaDiagnostic` 渲染。`loadProjectWikiSchema()` 优先读项目根 `schema.md`，再回退到 `wiki/schema.md`，并去除尾部斜杠。
+- 后端 service：`src-tauri/src/commands/schema.rs` 暴露 `get_compiled_schema`、`create_schema_proposal`、`apply_schema_proposal`、`reject_schema_proposal`，以及只读审计 `audit_project_schema_for_api`；Tauri commands `schema_get_compiled` / `schema_validate` / `schema_create_proposal` / `schema_apply_proposal` / `schema_reject_proposal` 全部经 `run_guarded_async` 包裹。
+- 提案存储：`<project>/.llm-wiki/schema/{proposals,audits,history}/`，proposal 文件名是 UUID；proposal 携带 `baseSchemaHash`，apply 时执行 CAS——若 `schema.md` 已被外部修改则拒绝覆盖。
+- Agent 工具：`schema.inspect`、`schema.validate`、`schema.propose_change`，permission 与 `wiki.search` / `wiki.write_page` 对齐；prompt 中明确写入规则和「不要假设 schema.md 已被更新」。
+- 事件：`AgentEvent::SchemaProposalConfirmationRequired`（type `schemaProposalConfirmationRequired`）伴随 proposal 全量下发，前端在 `SchemaProposalCard` 渲染 base revision hash、提议的完整 Markdown、影响页清单和将创建的目录。
+- 本地 API：`GET /api/v1/projects/{id}/schema`、`GET /schema/audit`、`POST /schema/proposals`、`/apply`、`/reject`；MCP 工具 `llm_wiki_schema*` 复用相同 endpoint。Apply 永远不动 Wiki 页面，只更新 schema.md、新建目录并写 audit；现有不合规页只列入影响清单。
+- 编写原则：**绝不让 Agent 任意改根 schema**。任何 schema 修改必须先 propose，等用户在 UI/API/MCP 接受后才能落盘；外部编辑过 schema 的提案必须基于最新 hash 重新生成。
+
+### Agent 记忆（项目/会话级）
+
+Memory 是用户显式接受的、经敏感过滤的结构化知识；项目级跨会话生效，会话级仅作用于当前 Agent run。
+
+- Store：`src-tauri/src/agent/memory.rs` 暴露 `ProjectMemoryStore`（CRUD、检索、archive、redact）与 `MemoryImporter`（JSON/JSONL/Markdown 解析）。持久化路径 `<project>/.llm-wiki/memory/{active,proposals,archive,imports,audit.jsonl}`。
+- 注入：仅 `accepted + active + 未过期 + 未 schema_stale + scope 匹配` 的条目会通过 `build_injection()` 写入 system prompt（≤2 KB 字符预算，类型/scope/confidence 来源信息始终展示）。Session memory 仅在该 Agent session 内可见，不进入跨会话 index。
+- 安全门控：`reject_sensitive()` 拦截 token、API key、私钥、cookie、连接串等模式；任何含敏感内容的候选直接被拒并写入审计事件，禁止自动接受。
+- Agent 工具：`memory.search` / `memory.propose` / `memory.list`；prompt 中明确「只有用户确认 stable preference/decision 才能 propose，never claim memory was saved」。
+- 事件：`AgentEvent::MemoryProposalConfirmationRequired`（type `memoryProposalConfirmationRequired`）携带 proposal；UI 在 `MemoryProposalCard` 渲染 kind/scope/confidence/title/content/reason。
+- Tauri commands：`memory_search` / `memory_list` / `memory_accept_proposal` / `memory_reject_proposal` / `memory_archive` / `memory_redact` / `memory_import_parse` / `memory_import_accept` / `memory_import_list` / `memory_import_discard`；本地 API：`/projects/{id}/memory/{search,list,proposals/*/accept,proposals/*/reject,*/archive,*/redact,imports,…}`；MCP 工具 `llm_wiki_memory_*`。
+- 外部导入：`MemoryImporter::parse()` 仅生成 pending batches，逐条 `accept_candidate` 才落 `active/`；批次保存在 `imports/<batchId>.json`，重复条目标记 `duplicate_of`，敏感条目标记 `sensitive` 且不接受。
+- 编写原则：**Memory 不替代 schema**；schema 仍然代表真源，memory 只是经过用户确认的偏好/事实/约定，schema 变更时已确认的 memory 可能被标记 `schema_stale`，不自动改写。
+- 测试：`agent::memory::tests` 共 6 个用例覆盖敏感拒绝、会话级隔离、proposal/accept/archive/redact 全链路、JSONL/Markdown 导入敏感/重复检测；执行 `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::memory` 验证。
 
 ## 关键代码约束
 

@@ -4,21 +4,31 @@ export interface SelectionWithin {
 }
 
 /**
+ * 判断 selection 是否为空或折叠（无法产生有效高亮）。
+ * null（无 window）、无 range、或折叠均视为「空」。
+ */
+export function isCollapsedOrEmpty(sel: Selection | null): boolean {
+  if (!sel || sel.rangeCount === 0) return true
+  if (sel.isCollapsed) return true
+  return false
+}
+
+/**
  * 取当前 window selection；若不在 root 内、或为空/折叠、或跨越 root 边界则返回 null。
  *
  * range 是基于 root.textContent 的 UTF-16 code unit 偏移（与 String.prototype.slice 一致）。
  */
 export function getSelectionWithin(root: HTMLElement): SelectionWithin | null {
   const sel = typeof window !== "undefined" ? window.getSelection() : null
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
+  if (isCollapsedOrEmpty(sel)) return null
 
-  const range = sel.getRangeAt(0)
+  const range = sel!.getRangeAt(0)
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) {
     return null
   }
   if (range.collapsed) return null
 
-  const snippet = sel.toString().trim()
+  const snippet = sel!.toString().trim()
   if (!snippet) return null
 
   const charRange = getCharacterRange(root, range)

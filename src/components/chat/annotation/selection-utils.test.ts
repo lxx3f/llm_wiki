@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
-import { getSelectionWithin } from "./selection-utils"
+import { getSelectionWithin, isCollapsedOrEmpty } from "./selection-utils"
 
 describe("getSelectionWithin", () => {
   it("returns null when no selection", () => {
@@ -49,5 +50,24 @@ describe("getSelectionWithin", () => {
     const result = getSelectionWithin(root)
     expect(result?.snippet).toBe("😀")
     expect(result?.range).toEqual({ start: 1, end: 3 })
+  })
+})
+
+describe("isCollapsedOrEmpty", () => {
+  function makeCollapsedSelection(): Selection {
+    document.body.innerHTML = '<div id="r">Hello world</div>'
+    const root = document.getElementById("r")!
+    const range = document.createRange()
+    range.setStart(root.firstChild!, 3)
+    range.collapse(true) // collapsed at a single point
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+    return sel
+  }
+
+  it("returns true for null and for a collapsed selection", () => {
+    expect(isCollapsedOrEmpty(null)).toBe(true)
+    expect(isCollapsedOrEmpty(makeCollapsedSelection())).toBe(true)
   })
 })

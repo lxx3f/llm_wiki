@@ -8,6 +8,43 @@
  * share one backend behavior.
  */
 
+import type { DisplayMessage } from "../stores/chat-store"
+
+/**
+ * Annotation 状态机：
+ *   open       - 旁注刚创建，正在追问中
+ *   resolved   - 用户标记"明白"或 5 分钟无活动
+ *   flattened  - 已压平插入主 conversation；此后只读
+ */
+export type AnnotationStatus = "open" | "resolved" | "flattened"
+
+/**
+ * 旁注：挂在某条 DisplayMessage 上、锚定到 snippet 的子对话。
+ *
+ * 设计要点：
+ *   - thread 是自包含的 Q&A 流，不进入主 conversation 历史
+ *   - chatMessagesToLLM() 必须跳过 annotation thread
+ *   - range 偏移基准 UTF-16 code unit（与 String.prototype.slice 一致）
+ *   - parentMessageId 永不修改；flatten 后 thread 内容会被复制追加到
+ *     主 conversation 末尾，但 annotation 本身保留为只读
+ */
+export interface ChatAnnotation {
+  id: string
+  parentMessageId: string
+  snippet: string
+  range?: { start: number; end: number }
+  status: AnnotationStatus
+  createdAt: number
+  /** 自包含 Q&A 流；role 限定 user / assistant */
+  thread: DisplayMessage[]
+  /** 创建时的可选上下文提示 */
+  contextHint?: string
+  /** flatten 后写入主 conversation 的新消息 id 列表（仅 flattened 时存在） */
+  flattenedMessageIds?: string[]
+  /** 已保存为 wiki 页面时回写的目标路径；用于反向链接 chip */
+  wikiPath?: string
+}
+
 export type ChatAgentEventStage =
   | "understanding"
   | "routing"

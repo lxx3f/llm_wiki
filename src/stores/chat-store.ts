@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import type { ChatMessage, ContentBlock } from "@/lib/llm-client"
 import i18n from "@/i18n"
-import type { ChatAgentFileChange, ChatAgentMode, ChatMemoryProposal, ChatPendingWikiWrite, ChatAgentStep, ChatRetrievalMode, ChatSchemaProposal, ChatShellCommandApproval, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { ChatAgentFileChange, ChatAgentMode, ChatAnnotation, ChatMemoryProposal, ChatPendingWikiWrite, ChatAgentStep, ChatRetrievalMode, ChatSchemaProposal, ChatShellCommandApproval, ChatUserInputRequest } from "@/lib/chat-agent-types"
 import type { WikiWriteMode } from "@/lib/wiki-page-context"
 
 /**
@@ -53,6 +53,8 @@ export interface DisplayMessage {
   pendingSchemaProposal?: ChatSchemaProposal  // staged Schema update requiring user confirmation
   pendingMemoryProposal?: ChatMemoryProposal  // staged Memory entry requiring user confirmation
   shellCommandApproval?: ChatShellCommandApproval  // resolved Shell authorization boundary for this Agent turn
+  /** 旁注：snippet 锚定的子对话数组 */
+  annotations?: ChatAnnotation[]
 }
 
 interface ChatState {

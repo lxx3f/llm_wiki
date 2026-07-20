@@ -437,6 +437,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   appendAnnotationMessage: (annotationId, role, content) => {
+    // Guard: an annotation that has already been flattened into the main
+    // conversation is read-only (spec §2.5). The flattened thread copy
+    // in the main conversation has already diverged from the annotation
+    // thread by this point, so further writes would silently mutate a
+    // frozen record. Silent no-op keeps the thread byte-identical to the
+    // snapshot taken at flatten time — mirroring `resolveAnnotation`'s
+    // open-only idempotency.
+    const messages = get().messages
+    const parentWithAnn = messages.find((m) =>
+      m.annotations?.some((a) => a.id === annotationId),
+    )
+    const targetAnn = parentWithAnn?.annotations?.find((a) => a.id === annotationId)
+    if (!targetAnn || targetAnn.status === "flattened") return
+
     const newMsg: DisplayMessage = {
       id: nextId(),
       role,
@@ -446,7 +460,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       threadKind: "annotation",
     }
     set({
-      messages: get().messages.map((m) => {
+      messages: messages.map((m) => {
         if (!m.annotations?.some((a) => a.id === annotationId)) return m
         return {
           ...m,
@@ -484,12 +498,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (ann.status === "flattened") return ann.flattenedMessageIds ?? []
 
     const newIds: string[] = ann.thread.map(() => nextId())
-    const newMainMessages: DisplayMessage[] = ann.thread.map((t, i) => ({
-      ...t,
-      id: newIds[i],
-      conversationId: parent.conversationId,
-      flattenedFromAnnotation: annotationId,
-    }))
+    // Once flattened, these messages live in the main conversation history,
+    // so they must NOT carry the `threadKind: "annotation"` marker — that
+    // marker is only valid inside `annotation.thread`, and
+    // `chatMessagesToLLM` (Task 1.3) filters on it. Discard the field
+    // explicitly so the copy cannot leak the thread-only flag.
+    const newMainMessages: DisplayMessage[] = ann.thread.map((t, i) => {
+      const { threadKind: _drop, ...rest } = t
+      return {
+        ...rest,
+        id: newIds[i],
+        conversationId: parent.conversationId,
+        flattenedFromAnnotation: annotationId,
+      }
+    })
 
     set({
       messages: [

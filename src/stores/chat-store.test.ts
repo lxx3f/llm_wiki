@@ -269,4 +269,67 @@ describe("annotation CRUD", () => {
       useChatStore.getState().createAnnotation("nonexistent", "x")
     ).toThrow(/parent message not found/)
   })
+
+  it("flattenAnnotation strips threadKind from flattened top-level messages", () => {
+    const store = useChatStore.getState()
+    store.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    store.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = store.createAnnotation(parentId, "snippet")
+    store.appendAnnotationMessage(annId, "user", "Q?")
+    store.appendAnnotationMessage(annId, "assistant", "A.")
+
+    store.flattenAnnotation(annId)
+
+    const flattenedTail = useChatStore
+      .getState()
+      .messages
+      .filter((m) => m.flattenedFromAnnotation === annId)
+
+    expect(flattenedTail).toHaveLength(2)
+    for (const m of flattenedTail) {
+      // After flatten, these messages are part of the main conversation history
+      // (must NOT carry the annotation-thread marker that chatMessagesToLLM filters out).
+      expect(m.threadKind).toBeUndefined()
+      expect(m.flattenedFromAnnotation).toBe(annId)
+    }
+  })
+
+  it("appendAnnotationMessage is a no-op once an annotation is flattened", () => {
+    const store = useChatStore.getState()
+    store.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    store.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = store.createAnnotation(parentId, "snippet")
+    store.appendAnnotationMessage(annId, "user", "Q?")
+    store.appendAnnotationMessage(annId, "assistant", "A.")
+    store.flattenAnnotation(annId)
+
+    // Snapshot pre-mutation state.
+    const annBefore = useChatStore
+      .getState()
+      .messages
+      .find((m) => m.id === parentId)!.annotations![0]
+    expect(annBefore.status).toBe("flattened")
+    const threadBefore = [...annBefore.thread]
+    const totalBefore = useChatStore.getState().messages.length
+
+    // Try to keep adding to a frozen thread — must not change anything.
+    store.appendAnnotationMessage(annId, "user", "post-flatten follow-up")
+    store.appendAnnotationMessage(annId, "assistant", "post-flatten reply")
+
+    const annAfter = useChatStore
+      .getState()
+      .messages
+      .find((m) => m.id === parentId)!.annotations![0]
+    expect(annAfter.status).toBe("flattened")
+    expect(annAfter.thread).toHaveLength(threadBefore.length)
+    // Thread contents are byte-identical to the snapshot taken at flatten time.
+    expect(annAfter.thread.map((m) => m.id)).toEqual(threadBefore.map((m) => m.id))
+
+    // Main conversation is not mutated either.
+    expect(useChatStore.getState().messages.length).toBe(totalBefore)
+  })
 })

@@ -540,27 +540,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }))
 
-export function chatMessagesToLLM(messages: DisplayMessage[]): ChatMessage[] {
-  return messages.map((m) => {
-    // No images → keep the legacy string shape. Providers and the
-    // single-string fast paths in the translators stay unchanged,
-    // and existing tests that assert `content: "..."` keep passing.
-    if (!m.images || m.images.length === 0) {
-      return { role: m.role, content: m.content }
-    }
-    // Images present → emit a ContentBlock[]. Text first (so the
-    // model reads the prompt before the images), then one image
-    // block per attachment. An empty text (image-only message)
-    // still gets a text block — harmless, and keeps the shape
-    // uniform.
-    const blocks: ContentBlock[] = [
-      { type: "text", text: m.content },
-      ...m.images.map((img): ContentBlock => ({
-        type: "image",
-        mediaType: img.mediaType,
-        dataBase64: img.dataBase64,
-      })),
-    ]
-    return { role: m.role, content: blocks }
-  })
+/**
+ * `chatMessagesToLLM` carries the `DisplayMessage.id` through to the wire
+ * shape so callers (annotation filter, tests) can correlate filtered
+ * messages back to the source conversation. `id` is purely for the
+ * frontend pipeline; providers drop it before serialization.
+ */
+interface ChatMessageToLLM extends ChatMessage {
+  id: string
+}
+
+export function chatMessagesToLLM(
+  messages: DisplayMessage[],
+  conversationId?: string,
+): ChatMessageToLLM[] {
+  return messages
+    .filter((m) => !conversationId || m.conversationId === conversationId)
+    .filter((m) => m.threadKind !== "annotation")
+    .map((m): ChatMessageToLLM => {
+      // No images → keep the legacy string shape. Providers and the
+      // single-string fast paths in the translators stay unchanged,
+      // and existing tests that assert `content: "..."` keep passing.
+      if (!m.images || m.images.length === 0) {
+        return { id: m.id, role: m.role, content: m.content }
+      }
+      // Images present → emit a ContentBlock[]. Text first (so the
+      // model reads the prompt before the images), then one image
+      // block per attachment. An empty text (image-only message)
+      // still gets a text block — harmless, and keeps the shape
+      // uniform.
+      const blocks: ContentBlock[] = [
+        { type: "text", text: m.content },
+        ...m.images.map((img): ContentBlock => ({
+          type: "image",
+          mediaType: img.mediaType,
+          dataBase64: img.dataBase64,
+        })),
+      ]
+      return { id: m.id, role: m.role, content: blocks }
+    })
 }

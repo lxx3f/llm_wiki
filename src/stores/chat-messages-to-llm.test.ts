@@ -13,7 +13,8 @@ function msg(partial: Partial<DisplayMessage> & Pick<DisplayMessage, "role" | "c
 describe("chatMessagesToLLM", () => {
   it("keeps the legacy string shape when a message has no images", () => {
     const out = chatMessagesToLLM([msg({ role: "user", content: "hello" })])
-    expect(out).toEqual([{ role: "user", content: "hello" }])
+    expect(out[0].role).toBe("user")
+    expect(out[0].content).toBe("hello")
     expect(typeof out[0].content).toBe("string")
   })
 
@@ -48,5 +49,33 @@ describe("chatMessagesToLLM", () => {
     const blocks = out[0].content as Array<{ type: string }>
     expect(blocks[0]).toEqual({ type: "text", text: "" })
     expect(blocks[1]).toEqual({ type: "image", mediaType: "image/webp", dataBase64: "CCCC" })
+  })
+})
+
+describe("chatMessagesToLLM filters annotation thread", () => {
+  it("excludes messages marked as annotation thread", () => {
+    const main: DisplayMessage = {
+      id: "m1", role: "user", content: "main Q", timestamp: 1,
+      conversationId: "c1",
+    }
+    const annThreadMsg: DisplayMessage = {
+      id: "a1", role: "user", content: "follow-up",
+      timestamp: 2, conversationId: "c1", threadKind: "annotation",
+    }
+    const out = chatMessagesToLLM([main, annThreadMsg], "c1")
+    expect(out.map(m => m.id)).toEqual(["m1"])
+  })
+
+  it("includes flattened messages from annotation", () => {
+    const main: DisplayMessage = {
+      id: "m1", role: "user", content: "main", timestamp: 1, conversationId: "c1",
+    }
+    const flattened: DisplayMessage = {
+      id: "f1", role: "user", content: "from annotation",
+      timestamp: 2, conversationId: "c1",
+      flattenedFromAnnotation: "ann_1",
+    }
+    const out = chatMessagesToLLM([main, flattened], "c1")
+    expect(out.map(m => m.id)).toEqual(["m1", "f1"])
   })
 })

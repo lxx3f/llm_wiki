@@ -8,4 +8,5 @@ pub mod file_sync;
 pub mod fs;
 pub mod project;
 pub mod search;
+pub mod schema;
 pub mod vectorstore;

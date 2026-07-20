@@ -243,6 +243,19 @@
       "rejected": "Shell command rejected; it was not run",
       "otherResolved": "Continuing with your instructions"
     },
+    "schemaProposal": {
+      "pending": "Schema change needs approval",
+      "title": "Review schema proposal",
+      "description": "Applying updates schema.md and creates any newly declared wiki directories. Existing wiki pages are not moved or rewritten; affected pages remain available in the audit.",
+      "affectedPages": "{{count}} affected page(s)",
+      "directories": "Directories to create",
+      "viewSchema": "Proposed schema",
+      "baseRevision": "Base revision",
+      "apply": "Apply schema change",
+      "reject": "Reject proposal",
+      "applied": "Schema proposal applied",
+      "rejected": "Schema proposal rejected"
+    },
     "skillSources": {
       "project": "Project",
       "claude": "Claude",

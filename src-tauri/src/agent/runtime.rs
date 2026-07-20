@@ -544,7 +544,7 @@ impl AgentRuntime {
                 });
                 emit_event(&mut events, &event_sink, AgentEvent::tool_end("wiki.write_page", Some("confirmation required".to_string())));
             } else {
-            let tool_context = self.tool_context();
+            let tool_context = self.tool_context(None);
             match execute_tool_with_cancellation(
                 tool_registry.execute(
                     "wiki.write_page",
@@ -695,7 +695,7 @@ impl AgentRuntime {
                                 "command": command,
                                 "timeoutSeconds": timeout_seconds,
                             }),
-                            self.tool_context(),
+                            self.tool_context(None),
                         ),
                         cancellation.as_ref(),
                     )
@@ -808,7 +808,7 @@ impl AgentRuntime {
                         "topK": top_k,
                         "includeContent": request.include_content.unwrap_or(false)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -959,7 +959,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1048,7 +1048,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1137,7 +1137,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -1227,7 +1227,7 @@ impl AgentRuntime {
                             .unwrap_or(DEFAULT_CHAT_SEARCH_RESULTS)
                             .clamp(1, MAX_CHAT_SEARCH_RESULTS)
                     }),
-                    self.tool_context(),
+                    self.tool_context(None),
                 ),
                 cancellation.as_ref(),
             )
@@ -2413,7 +2413,7 @@ impl AgentRuntime {
         }
 
         let result = execute_tool_with_cancellation(
-            tool_registry.execute(tool, input, self.tool_context()),
+            tool_registry.execute(tool, input, self.tool_context(Some(session_id))),
             cancellation,
         )
         .await;
@@ -2512,6 +2512,15 @@ impl AgentRuntime {
                     "path": path,
                 }))
             }
+            "schema.inspect" | "schema.validate" => Ok(serde_json::json!({})),
+            "schema.propose_change" => {
+                let content = action
+                    .content
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| "schema.propose_change requires the complete proposed schema in content".to_string())?;
+                Ok(serde_json::json!({ "proposedSchema": content }))
+            }
             "wiki.write_page" => {
                 let path = action
                     .path
@@ -2591,6 +2600,47 @@ impl AgentRuntime {
         event_sink: &Option<AgentEventSink>,
     ) -> Result<String, String> {
         match tool {
+            "schema.propose_change" => {
+                let proposal: crate::commands::schema::SchemaProposal = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid schema.propose_change result: {err}"))?;
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::SchemaProposalConfirmationRequired {
+                        proposal: proposal.clone(),
+                    },
+                );
+                Ok(format!(
+                    "Created pending schema proposal {} (base={}, version={}, affectedPages={}). Wait for the user's explicit approval; do not claim schema.md was changed.",
+                    proposal.id,
+                    proposal.base_schema_hash,
+                    proposal.compiled.schema_version,
+                    proposal.impact.affected_pages.len(),
+                ))
+            }
+            "schema.inspect" => {
+                let schema: crate::commands::schema::CompiledSchema = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid schema.inspect result: {err}"))?;
+                Ok(format!(
+                    "schema version={} hash={} pageTypes={} diagnostics={}\n{}",
+                    schema.schema_version,
+                    schema.content_hash,
+                    schema.type_dirs.len(),
+                    schema.diagnostics.len(),
+                    trim_chars(&serde_json::to_string_pretty(&schema).unwrap_or_default(), 6_000),
+                ))
+            }
+            "schema.validate" => {
+                let audit: crate::commands::schema::SchemaImpactReport = serde_json::from_value(value)
+                    .map_err(|err| format!("Invalid schema.validate result: {err}"))?;
+                Ok(format!(
+                    "schema audit scanned={} affected={} truncated={}\n{}",
+                    audit.pages_scanned,
+                    audit.affected_pages.len(),
+                    audit.truncated,
+                    trim_chars(&serde_json::to_string_pretty(&audit).unwrap_or_default(), 6_000),
+                ))
+            }
             "wiki.search" => {
                 let search: tools::WikiSearchToolOutput = serde_json::from_value(value)
                     .map_err(|err| format!("Invalid wiki.search result: {err}"))?;
@@ -2849,9 +2899,11 @@ impl AgentRuntime {
         }
     }
 
-    fn tool_context(&self) -> tools::ToolContext<'_> {
+    fn tool_context(&self, session_id: Option<&str>) -> tools::ToolContext<'_> {
         tools::ToolContext {
             project_path: &self.project_path,
+            project_id: &self.project_id,
+            session_id: session_id.map(str::to_string),
             embedding_config: self.embedding_config.clone(),
             web_search_config: self.web_search_config.clone(),
             anytxt_config: self.anytxt_config.clone(),
@@ -3542,6 +3594,9 @@ fn build_agent_loop_user(
         out.push_str("- wiki.read_page: read a specific wiki markdown page by path. Supports optional offset + limit (1-indexed line numbers) for paginating large pages; response is line-numbered for use with wiki.edit_page.\n");
         out.push_str("- source.search: search raw source snippets.\n");
         out.push_str("- graph.search: retrieve relationships, neighbors, backlinks, dependencies, and connections between entities. Prefer it for relational questions and query with concise entity or concept names.\n");
+        out.push_str("- schema.inspect: inspect the compiled project schema version, Page Types routing, and diagnostics before suggesting structural changes.\n");
+        out.push_str("- schema.validate: audit existing wiki pages against the current schema without modifying them.\n");
+        out.push_str("- schema.propose_change: create a pending user-reviewable proposal to replace the complete root schema.md. Use content for the complete proposed Markdown. It never applies the proposal; only the user can approve it in the Schema proposal UI.\n");
         out.push_str("- wiki.write_page: create or overwrite a Markdown wiki page when explicitly requested. The path must start with \"wiki/\" and end with \".md\". Overwrites existing pages by default (ClaudeCode Write semantics); pass allowOverwrite=false for an explicit create-only guard. The full markdown body must fit in one compact JSON action; for long pages, split the topic across multiple sibling wiki pages or use shell.exec with a small heredoc to append.\n");
         out.push_str("- wiki.edit_page: apply a targeted string replacement to an existing wiki page (old_string → new_string). By default rejects ambiguous matches; pass replace_all=true to batch-replace. Prefer this over wiki.write_page when only a few lines change.\n");
     }
@@ -3853,7 +3908,10 @@ fn normalize_agent_loop_action(mut action: AgentLoopAction) -> AgentLoopAction {
 fn is_agent_loop_tool_name(value: &str) -> bool {
     matches!(
         value,
-        "wiki.search"
+        "schema.inspect"
+            | "schema.validate"
+            | "schema.propose_change"
+            | "wiki.search"
             | "wiki.read_page"
             | "wiki.write_page"
             | "source.search"
@@ -4254,6 +4312,18 @@ fn require_tool_permission(
                 return Err("source.search is disabled for this turn".to_string());
             }
             permission_policy.require(AgentCapability::ReadSource)
+        }
+        "schema.inspect" | "schema.validate" => {
+            if !request.tools.wiki {
+                return Err(format!("{tool} is disabled for this turn"));
+            }
+            permission_policy.require(AgentCapability::ReadProject)
+        }
+        "schema.propose_change" => {
+            if !request.tools.wiki {
+                return Err("schema.propose_change is disabled for this turn".to_string());
+            }
+            permission_policy.require(AgentCapability::WriteWiki)
         }
         "wiki.write_page" => {
             if !request.tools.wiki {

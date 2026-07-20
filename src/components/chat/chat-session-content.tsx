@@ -16,7 +16,7 @@ import { executeIngestWrites } from "@/lib/ingest"
 import { openPathInProject, readFile } from "@/commands/fs"
 import { getFileName, isAbsolutePath, normalizePath } from "@/lib/path-utils"
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search"
-import type { ChatAgentEvent, ChatAgentFileChange, ChatAgentStep, ChatPendingWikiWrite, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { ChatAgentEvent, ChatAgentFileChange, ChatAgentStep, ChatPendingWikiWrite, ChatSchemaProposal, ChatUserInputRequest } from "@/lib/chat-agent-types"
 import type { ChatMessage as LlmChatMessage, ContentBlock } from "@/lib/llm-client"
 import { FilePreview } from "@/components/editor/file-preview"
 import { WikiReader } from "@/components/editor/wiki-reader"
@@ -68,6 +68,7 @@ interface BackendAgentEventPayload {
     existedBefore?: boolean
     previousContent?: string
     pendingWrite?: ChatPendingWikiWrite
+    proposal?: ChatSchemaProposal
   }
 }
 
@@ -680,6 +681,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           let accumulated = ""
           const references: MessageReference[] = []
           let pendingWikiWrite: ChatPendingWikiWrite | undefined
+          let pendingSchemaProposal: ChatSchemaProposal | undefined
           const backendEvents: BackendAgentToolEvent[] = []
           const fileChanges = new Map<string, ChatAgentFileChange>()
           const fileEditChanges: ChatAgentFileChange[] = []
@@ -732,6 +734,10 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             }
             if (agentEvent.type === "wikiWriteConfirmationRequired" && agentEvent.pendingWrite) {
               pendingWikiWrite = agentEvent.pendingWrite
+              return
+            }
+            if (agentEvent.type === "schemaProposalConfirmationRequired" && agentEvent.proposal) {
+              pendingSchemaProposal = agentEvent.proposal
               return
             }
             if (agentEvent.type === "messageDelta" && agentEvent.text) {
@@ -945,6 +951,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             fileEditChanges,
           )
           if (pendingWikiWrite) addPendingWikiWriteToMessage(convId, pendingWikiWrite)
+          if (pendingSchemaProposal) addPendingSchemaProposalToMessage(convId, pendingSchemaProposal)
           if (!pendingUserInputRequest) {
             autoOpenSingleGeneratedOutput(convId, references)
           }
@@ -1397,6 +1404,55 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     })
   }, [])
 
+  const addPendingSchemaProposalToMessage = useCallback((conversationId: string, proposal: ChatSchemaProposal) => {
+    useChatStore.setState((state) => {
+      const messages = [...state.messages]
+      const index = [...messages].reverse().findIndex((message) => message.conversationId === conversationId && message.role === "assistant")
+      if (index === -1) return state
+      const messageIndex = messages.length - 1 - index
+      messages[messageIndex] = { ...messages[messageIndex], pendingSchemaProposal: proposal }
+      return { messages }
+    })
+  }, [])
+
+  const handleApplySchemaProposal = useCallback(async (messageId: string, proposal: ChatSchemaProposal) => {
+    if (!project || activeStreaming) return
+    try {
+      await invoke("schema_apply_proposal", {
+        projectId: project.id,
+        sessionId: activeConversationId,
+        proposalId: proposal.id,
+        expectedSchemaHash: proposal.baseSchemaHash,
+      })
+      useChatStore.setState((state) => ({
+        messages: state.messages.map((message) => message.id === messageId
+          ? { ...message, pendingSchemaProposal: { ...proposal, status: "applied" } }
+          : message),
+      }))
+      await refreshProjectFileTree(project.path, { bumpDataVersion: true })
+    } catch (error) {
+      console.error("[chat] failed to apply schema proposal:", error)
+    }
+  }, [activeConversationId, activeStreaming, project])
+
+  const handleRejectSchemaProposal = useCallback(async (messageId: string, proposal: ChatSchemaProposal) => {
+    if (!project || activeStreaming) return
+    try {
+      await invoke("schema_reject_proposal", {
+        projectId: project.id,
+        sessionId: activeConversationId,
+        proposalId: proposal.id,
+      })
+      useChatStore.setState((state) => ({
+        messages: state.messages.map((message) => message.id === messageId
+          ? { ...message, pendingSchemaProposal: { ...proposal, status: "rejected" } }
+          : message),
+      }))
+    } catch (error) {
+      console.error("[chat] failed to reject schema proposal:", error)
+    }
+  }, [activeConversationId, activeStreaming, project])
+
   const handleConfirmPendingWikiWrite = useCallback(async (messageId: string, pendingWrite: ChatPendingWikiWrite) => {
     if (!project) return
     if (activeStreaming) {
@@ -1581,6 +1637,14 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                         onSubmitUserInput={isLastAssistant ? handleSubmitUserInput : undefined}
                       />
                       {msg.pendingWikiWrite && <WikiWriteConfirmationCard pendingWrite={msg.pendingWikiWrite} onConfirm={() => void handleConfirmPendingWikiWrite(msg.id, msg.pendingWikiWrite!)} onCancel={() => handleCancelPendingWikiWrite(msg.id)} />}
+                      {msg.pendingSchemaProposal && (
+                        <SchemaProposalCard
+                          proposal={msg.pendingSchemaProposal}
+                          disabled={activeStreaming || !isLastAssistant}
+                          onApply={() => void handleApplySchemaProposal(msg.id, msg.pendingSchemaProposal!)}
+                          onReject={() => void handleRejectSchemaProposal(msg.id, msg.pendingSchemaProposal!)}
+                        />
+                      )}
                       </>
                     )
                   })}
@@ -1870,6 +1934,55 @@ function ChatReferencePreviewPanel({
         <ChatReferencePreviewContent preview={preview} />
       </div>
     </aside>
+  )
+}
+
+function SchemaProposalCard({
+  proposal,
+  disabled,
+  onApply,
+  onReject,
+}: {
+  proposal: ChatSchemaProposal
+  disabled: boolean
+  onApply: () => void
+  onReject: () => void
+}) {
+  const { t } = useTranslation()
+  const isPending = proposal.status === "pending"
+  const status = proposal.status === "applied"
+    ? t("chat.schemaProposal.applied")
+    : proposal.status === "rejected"
+      ? t("chat.schemaProposal.rejected")
+      : t("chat.schemaProposal.pending")
+  return (
+    <section className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm" aria-label={t("chat.schemaProposal.title")}>
+      <div className="font-medium">{status}</div>
+      <p className="mt-1 text-xs text-muted-foreground">{t("chat.schemaProposal.description")}</p>
+      <div className="mt-2 grid gap-1 text-xs">
+        <span>{t("chat.schemaProposal.baseRevision")}: <code className="break-all">{proposal.baseSchemaHash}</code></span>
+        <span>{t("chat.schemaProposal.affectedPages", { count: proposal.impact.affectedPages.length })}</span>
+        {proposal.requiredDirectories.length > 0 && <span>{t("chat.schemaProposal.directories")}: {proposal.requiredDirectories.join(", ")}</span>}
+      </div>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-medium text-primary">{t("chat.schemaProposal.viewSchema")}</summary>
+        <pre className="mt-2 max-h-56 overflow-auto rounded border border-border/60 bg-muted/40 p-2 whitespace-pre-wrap break-all font-mono text-[11px] text-foreground"><code>{proposal.proposedSchema}</code></pre>
+      </details>
+      {proposal.impact.affectedPages.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-muted-foreground">{t("chat.schemaProposal.affectedPages", { count: proposal.impact.affectedPages.length })}</summary>
+          <ul className="mt-1 max-h-28 overflow-auto space-y-1 text-[11px] text-muted-foreground">
+            {proposal.impact.affectedPages.map((page) => <li key={`${page.path}:${page.code}`}><code>{page.path}</code> — {page.message}</li>)}
+          </ul>
+        </details>
+      )}
+      {isPending && (
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="outline" size="sm" disabled={disabled} onClick={onReject}>{t("chat.schemaProposal.reject")}</Button>
+          <Button size="sm" disabled={disabled} onClick={onApply}>{t("chat.schemaProposal.apply")}</Button>
+        </div>
+      )}
+    </section>
   )
 }
 

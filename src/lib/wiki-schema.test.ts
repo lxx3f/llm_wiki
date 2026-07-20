@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  analyzeWikiSchemaImpact,
+  compileProjectWikiSchema,
   parseWikiSchemaRouting,
   validateWikiPageRouting,
 } from "./wiki-schema"
@@ -53,8 +55,38 @@ describe("parseWikiSchemaRouting", () => {
       concept: "wiki/concepts",
     })
   })
-})
+  it("reports schema version and malformed Page Types diagnostics", () => {
+    const compiled = compileProjectWikiSchema([
+      "---",
+      "schemaVersion: 3",
+      "---",
+      "",
+      "## Page Types",
+      "| Type | Directory |",
+      "| --- | --- |",
+      "| concept | wiki/concepts |",
+      "| concept | wiki/ideas |",
+      "| invalid type | outside/wiki |",
+    ].join("\n"))
 
+    expect(compiled.schemaVersion).toBe(3)
+    expect(compiled.contentHash).toMatch(/^fnv1a-/)
+    expect(compiled.typeDirs).toEqual({ concept: "wiki/concepts" })
+    expect(compiled.diagnostics.map((item) => item.code)).toEqual([
+      "invalid_type",
+      "duplicate_type",
+    ])
+  })
+
+  it("reports missing Page Types instead of silently pretending the schema is valid", () => {
+    const compiled = compileProjectWikiSchema("# Notes\n\nNo routing table.")
+    expect(compiled.typeDirs).toEqual({})
+    expect(compiled.diagnostics).toContainEqual(expect.objectContaining({
+      code: "missing_page_types",
+      severity: "warning",
+    }))
+  })
+})
 describe("validateWikiPageRouting", () => {
   const routing = parseWikiSchemaRouting(SCHEMA)
 
@@ -94,5 +126,30 @@ describe("validateWikiPageRouting", () => {
 
   it("does not enforce pages without a parseable type", () => {
     expect(validateWikiPageRouting("wiki/concepts/no-type.md", "# No Type", routing)).toBeNull()
+  })
+
+  it("returns structured routing details for an impact report", () => {
+    const report = analyzeWikiSchemaImpact([
+      {
+        path: "wiki/concepts/flash-attention.md",
+        content: "---\ntype: source\n---\n# Flash Attention",
+      },
+      {
+        path: "wiki/methods/retrieval.md",
+        content: "---\ntype: method\n---\n# Retrieval",
+      },
+    ], compileProjectWikiSchema(SCHEMA))
+
+    expect(report.pagesScanned).toBe(2)
+    expect(report.affectedPages).toEqual([
+      expect.objectContaining({
+        path: "wiki/concepts/flash-attention.md",
+        issue: expect.objectContaining({
+          code: "type_directory_mismatch",
+          expectedDir: "wiki/sources",
+          severity: "error",
+        }),
+      }),
+    ])
   })
 })

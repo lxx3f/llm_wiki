@@ -93,6 +93,8 @@ pub struct BuiltinToolRegistry;
 #[derive(Clone)]
 pub struct ToolContext<'a> {
     pub project_path: &'a str,
+    pub project_id: &'a str,
+    pub session_id: Option<String>,
     pub embedding_config: Option<SearchEmbeddingConfig>,
     pub web_search_config: Option<WebSearchConfig>,
     pub anytxt_config: Option<AnyTxtConfig>,
@@ -111,6 +113,39 @@ impl ToolRegistry for BuiltinToolRegistry {
     ) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'a>> {
         Box::pin(async move {
             match name {
+                "schema.inspect" => serde_json::to_value(
+                    crate::commands::schema::get_compiled_schema(context.project_path)?,
+                )
+                .map_err(|err| format!("Failed to serialize schema.inspect result: {err}")),
+                "schema.validate" => {
+                    let schema = crate::commands::schema::get_compiled_schema(context.project_path)?;
+                    serde_json::to_value(crate::commands::schema::audit_project_schema_for_api(
+                        context.project_path,
+                        &schema,
+                    )?)
+                    .map_err(|err| format!("Failed to serialize schema.validate result: {err}"))
+                }
+                "schema.propose_change" => {
+                    let session_id = context
+                        .session_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "schema.propose_change requires an active session".to_string())?;
+                    let proposed_schema = input
+                        .get("proposedSchema")
+                        .or_else(|| input.get("proposed_schema"))
+                        .or_else(|| input.get("content"))
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "schema.propose_change requires proposedSchema".to_string())?;
+                    serde_json::to_value(crate::commands::schema::create_schema_proposal(
+                        context.project_path,
+                        context.project_id,
+                        session_id,
+                        proposed_schema.to_string(),
+                    )?)
+                    .map_err(|err| format!("Failed to serialize schema.propose_change result: {err}"))
+                }
                 "wiki.write_page" => {
                     let path = input
                         .get("path")
@@ -659,6 +694,28 @@ pub fn builtin_tool_specs() -> Vec<ToolSpec> {
                     }
                 },
                 "required": ["query"]
+            })),
+        },
+        ToolSpec {
+            name: "schema.inspect".to_string(),
+            description: "Read the compiled project schema version, Page Types routing, and diagnostics. This is read-only. Use it before proposing a schema change.".to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: None,
+        },
+        ToolSpec {
+            name: "schema.validate".to_string(),
+            description: "Audit existing wiki pages against the current project schema. This is read-only: it reports affected paths and never migrates pages.".to_string(),
+            effects: vec![ToolEffect::Read],
+            parameters: None,
+        },
+        ToolSpec {
+            name: "schema.propose_change".to_string(),
+            description: "Create a pending, user-reviewable proposal for replacing the complete root schema.md. Never claims to apply the change; the user must explicitly approve it through the Schema proposal UI. Use only when the user asks to evolve the project schema or confirms a convention should be formalized.".to_string(),
+            effects: vec![ToolEffect::Write],
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "proposedSchema": { "type": "string", "description": "Complete proposed schema.md Markdown content." } },
+                "required": ["proposedSchema"]
             })),
         },
         ToolSpec {
@@ -3454,6 +3511,8 @@ mod tests {
         let registry = BuiltinToolRegistry;
         let context = ToolContext {
             project_path: root.to_str().unwrap(),
+            project_id: "test-project",
+            session_id: Some("test-session".to_string()),
             embedding_config: None,
             web_search_config: None,
             anytxt_config: None,
@@ -3484,6 +3543,8 @@ mod tests {
         let registry = BuiltinToolRegistry;
         let context = ToolContext {
             project_path: root.to_str().unwrap(),
+            project_id: "test-project",
+            session_id: Some("test-session".to_string()),
             embedding_config: None,
             web_search_config: None,
             anytxt_config: None,

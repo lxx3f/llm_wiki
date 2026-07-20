@@ -77,6 +77,38 @@ export interface ApiChatResponse {
   usage?: ApiChatUsage
 }
 
+export interface ApiSchema {
+  schemaVersion: number
+  contentHash: string
+  typeDirs: Record<string, string>
+  diagnostics: Array<{ severity: string; code: string; message: string; line?: number }>
+}
+
+export interface ApiSchemaImpactReport {
+  schemaHash: string
+  pagesScanned: number
+  affectedPages: Array<{ path: string; code: string; message: string; expectedDir?: string; expectedType?: string }>
+  truncated: boolean
+}
+
+export interface ApiSchemaProposal {
+  id: string
+  baseSchemaHash: string
+  proposedSchema: string
+  compiled: ApiSchema
+  impact: ApiSchemaImpactReport
+  requiredDirectories: string[]
+  createdAt: number
+  status: string
+}
+
+export interface ApiSchemaApplyResult {
+  schemaHash: string
+  schemaVersion: number
+  impact: ApiSchemaImpactReport
+  createdDirectories: string[]
+}
+
 export interface ApiGraphNode {
   id: string
   label: string
@@ -277,6 +309,39 @@ export class LlmWikiApiClient {
     }
   }
 
+  async schema(projectId = "current"): Promise<ApiSchema> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema`)
+    return parseSchema(json.schema)
+  }
+
+  async schemaAudit(projectId = "current"): Promise<ApiSchemaImpactReport> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/audit`)
+    return parseSchemaImpact(json.audit)
+  }
+
+  async createSchemaProposal(projectId: string, sessionId: string, proposedSchema: string): Promise<ApiSchemaProposal> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/proposals`, {
+      method: "POST",
+      body: { sessionId, proposedSchema },
+    })
+    return parseSchemaProposal(json.proposal)
+  }
+
+  async applySchemaProposal(projectId: string, proposalId: string, sessionId: string, expectedSchemaHash: string): Promise<ApiSchemaApplyResult> {
+    const json = await this.request(`/projects/${encodeURIComponent(projectId)}/schema/proposals/${encodeURIComponent(proposalId)}/apply`, {
+      method: "POST",
+      body: { sessionId, expectedSchemaHash },
+    })
+    return parseSchemaApplyResult(json.result)
+  }
+
+  async rejectSchemaProposal(projectId: string, proposalId: string, sessionId: string): Promise<void> {
+    await this.request(`/projects/${encodeURIComponent(projectId)}/schema/proposals/${encodeURIComponent(proposalId)}/reject`, {
+      method: "POST",
+      body: { sessionId },
+    })
+  }
+
   async graph(projectId = "current", options: { q?: string; nodeType?: string; limit?: number } = {}): Promise<{ nodes: ApiGraphNode[]; edges: ApiGraphEdge[] }> {
     const params = new URLSearchParams()
     if (options.q) params.set("q", options.q)
@@ -329,6 +394,47 @@ export class LlmWikiApiClient {
     }
     return json
   }
+}
+
+function parseSchema(value: unknown): ApiSchema {
+  const obj = requireObject(value, "schema")
+  const typeDirs = obj.typeDirs && typeof obj.typeDirs === "object" && !Array.isArray(obj.typeDirs)
+    ? Object.fromEntries(Object.entries(obj.typeDirs).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+    : {}
+  return {
+    schemaVersion: numberOrUndefined(obj.schemaVersion) ?? 1,
+    contentHash: String(obj.contentHash ?? ""),
+    typeDirs,
+    diagnostics: Array.isArray(obj.diagnostics) ? obj.diagnostics.map((item) => {
+      const diagnostic = requireObject(item, "schema diagnostic")
+      return { severity: String(diagnostic.severity ?? "warning"), code: String(diagnostic.code ?? "unknown"), message: String(diagnostic.message ?? ""), ...(numberOrUndefined(diagnostic.line) !== undefined ? { line: numberOrUndefined(diagnostic.line) } : {}) }
+    }) : [],
+  }
+}
+
+function parseSchemaImpact(value: unknown): ApiSchemaImpactReport {
+  const obj = requireObject(value, "schema audit")
+  return {
+    schemaHash: String(obj.schemaHash ?? ""),
+    pagesScanned: numberOrUndefined(obj.pagesScanned) ?? 0,
+    affectedPages: Array.isArray(obj.affectedPages) ? obj.affectedPages.map((item) => {
+      const page = requireObject(item, "schema affected page")
+      return { path: String(page.path ?? ""), code: String(page.code ?? "unknown"), message: String(page.message ?? ""), ...(typeof page.expectedDir === "string" ? { expectedDir: page.expectedDir } : {}), ...(typeof page.expectedType === "string" ? { expectedType: page.expectedType } : {}) }
+    }) : [],
+    truncated: obj.truncated === true,
+  }
+}
+
+function parseSchemaProposal(value: unknown): ApiSchemaProposal {
+  const obj = requireObject(value, "schema proposal")
+  return {
+    id: String(obj.id ?? ""), baseSchemaHash: String(obj.baseSchemaHash ?? ""), proposedSchema: String(obj.proposedSchema ?? ""), compiled: parseSchema(obj.compiled), impact: parseSchemaImpact(obj.impact), requiredDirectories: Array.isArray(obj.requiredDirectories) ? obj.requiredDirectories.filter((item): item is string => typeof item === "string") : [], createdAt: numberOrUndefined(obj.createdAt) ?? 0, status: String(obj.status ?? "pending"),
+  }
+}
+
+function parseSchemaApplyResult(value: unknown): ApiSchemaApplyResult {
+  const obj = requireObject(value, "schema apply result")
+  return { schemaHash: String(obj.schemaHash ?? ""), schemaVersion: numberOrUndefined(obj.schemaVersion) ?? 1, impact: parseSchemaImpact(obj.impact), createdDirectories: Array.isArray(obj.createdDirectories) ? obj.createdDirectories.filter((item): item is string => typeof item === "string") : [] }
 }
 
 function parseProject(value: unknown): ApiProject {

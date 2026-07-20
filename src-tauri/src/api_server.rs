@@ -281,6 +281,17 @@ fn handle_request(
         (&Method::Patch, ["projects", project_id, "reviews", review_id]) => {
             handle_patch_review(app, project_id, review_id, body)
         }
+        (&Method::Post, ["projects", project_id, "schema", "proposals"]) => {
+            handle_create_schema_proposal(app, project_id, body)
+        }
+        (&Method::Post, ["projects", project_id, "schema", "proposals", proposal_id, "apply"]) => {
+            handle_apply_schema_proposal(app, project_id, proposal_id, body)
+        }
+        (&Method::Post, ["projects", project_id, "schema", "proposals", proposal_id, "reject"]) => {
+            handle_reject_schema_proposal(app, project_id, proposal_id, body)
+        }
+        (&Method::Get, ["projects", project_id, "schema"]) => handle_schema(app, project_id),
+        (&Method::Get, ["projects", project_id, "schema", "audit"]) => handle_schema_audit(app, project_id),
         (&Method::Post, ["projects", project_id, "search"]) => handle_search(app, project_id, body),
         (&Method::Get, ["projects", project_id, "graph"]) => handle_graph(app, project_id, query),
         (&Method::Post, ["projects", project_id, "sources", "rescan"]) => {
@@ -1620,6 +1631,112 @@ fn write_raw_review_array(path: &Path, parsed: &Value) -> Result<(), String> {
     let serialized = serde_json::to_string_pretty(parsed)
         .map_err(|err| format!("Failed to serialize review state: {err}"))?;
     fs::write(path, serialized).map_err(|err| format!("Failed to write review state: {err}"))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaProposalApiRequest {
+    session_id: String,
+    proposed_schema: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaProposalDecisionApiRequest {
+    session_id: String,
+    #[serde(default)]
+    expected_schema_hash: String,
+}
+
+fn handle_schema(app: &AppHandle, project_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    match commands::schema::get_compiled_schema(&project.path) {
+        Ok(schema) => ok(json!({ "schema": schema })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_schema_audit(app: &AppHandle, project_id: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let schema = match commands::schema::get_compiled_schema(&project.path) {
+        Ok(schema) => schema,
+        Err(error) => return err(400, error),
+    };
+    match commands::schema::audit_project_schema_for_api(&project.path, &schema) {
+        Ok(audit) => ok(json!({ "audit": audit })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_create_schema_proposal(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: SchemaProposalApiRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.session_id.trim().is_empty() || request.proposed_schema.trim().is_empty() {
+        return err(400, "sessionId and proposedSchema are required");
+    }
+    match commands::schema::create_schema_proposal(
+        &project.path,
+        &project.id,
+        &request.session_id,
+        request.proposed_schema,
+    ) {
+        Ok(proposal) => ok(json!({ "proposal": proposal })),
+        Err(error) => err(400, error),
+    }
+}
+
+fn handle_apply_schema_proposal(app: &AppHandle, project_id: &str, proposal_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: SchemaProposalDecisionApiRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.session_id.trim().is_empty() || request.expected_schema_hash.trim().is_empty() {
+        return err(400, "sessionId and expectedSchemaHash are required");
+    }
+    match commands::schema::apply_schema_proposal(
+        &project.path,
+        &project.id,
+        &request.session_id,
+        proposal_id,
+        &request.expected_schema_hash,
+    ) {
+        Ok(result) => ok(json!({ "result": result })),
+        Err(error) => err(409, error),
+    }
+}
+
+fn handle_reject_schema_proposal(app: &AppHandle, project_id: &str, proposal_id: &str, body: &str) -> ApiResponse {
+    let project = match resolve_project(app, project_id) {
+        Ok(project) => project,
+        Err(error) => return err(404, error),
+    };
+    let request: SchemaProposalDecisionApiRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => return err(400, format!("Invalid JSON: {error}")),
+    };
+    if request.session_id.trim().is_empty() {
+        return err(400, "sessionId is required");
+    }
+    match commands::schema::reject_schema_proposal(&project.path, &project.id, &request.session_id, proposal_id) {
+        Ok(()) => ok(json!({ "rejected": true })),
+        Err(error) => err(409, error),
+    }
 }
 
 #[derive(Deserialize)]

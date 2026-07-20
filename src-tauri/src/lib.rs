@@ -180,6 +180,77 @@ async fn agent_confirm_wiki_write(
 }
 
 #[tauri::command]
+async fn schema_create_proposal(
+    app: tauri::AppHandle,
+    project_id: String,
+    session_id: String,
+    proposed_schema: String,
+) -> Result<commands::schema::SchemaProposal, String> {
+    run_guarded_async("schema_create_proposal", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            commands::schema::create_schema_proposal(
+                &project.path,
+                &project.id,
+                &session_id,
+                proposed_schema,
+            )
+        })
+        .await
+        .map_err(|error| format!("schema_create_proposal task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn schema_apply_proposal(
+    app: tauri::AppHandle,
+    project_id: String,
+    session_id: String,
+    proposal_id: String,
+    expected_schema_hash: String,
+) -> Result<commands::schema::SchemaApplyResult, String> {
+    run_guarded_async("schema_apply_proposal", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            commands::schema::apply_schema_proposal(
+                &project.path,
+                &project.id,
+                &session_id,
+                &proposal_id,
+                &expected_schema_hash,
+            )
+        })
+        .await
+        .map_err(|error| format!("schema_apply_proposal task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
+async fn schema_reject_proposal(
+    app: tauri::AppHandle,
+    project_id: String,
+    session_id: String,
+    proposal_id: String,
+) -> Result<(), String> {
+    run_guarded_async("schema_reject_proposal", async move {
+        let project = resolve_agent_project(&app, &project_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            commands::schema::reject_schema_proposal(
+                &project.path,
+                &project.id,
+                &session_id,
+                &proposal_id,
+            )
+        })
+        .await
+        .map_err(|error| format!("schema_reject_proposal task join error: {error}"))?
+    })
+    .await
+}
+
+#[tauri::command]
 fn agent_cancel_turn(
     app: tauri::AppHandle,
     project_id: String,
@@ -718,6 +789,8 @@ pub fn run() {
             commands::search::search_project,
             commands::search::embedding_fetch,
             commands::search::get_page_links,
+            commands::schema::schema_get_compiled,
+            commands::schema::schema_validate,
             commands::external_search::web_search,
             commands::external_search::anytxt_search,
             clip_server_status,
@@ -726,6 +799,9 @@ pub fn run() {
             agent_start_turn,
             agent_start_turn_stream,
             agent_confirm_wiki_write,
+            schema_create_proposal,
+            schema_apply_proposal,
+            schema_reject_proposal,
             agent_cancel_turn,
             agent_get_session,
             agent_list_sessions,

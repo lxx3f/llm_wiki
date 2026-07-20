@@ -243,6 +243,19 @@
       "rejected": "已拒绝 Shell 命令；未执行",
       "otherResolved": "正在按你的补充说明继续"
     },
+    "schemaProposal": {
+      "pending": "Schema 变更需要确认",
+      "title": "审阅 Schema 提案",
+      "description": "应用后会更新 schema.md 并创建新声明的 Wiki 目录。不会移动或重写已有 Wiki 页面；受影响页面会保留在审计结果中。",
+      "affectedPages": "{{count}} 个受影响页面",
+      "directories": "将创建的目录",
+      "viewSchema": "提议的 Schema",
+      "baseRevision": "基础版本",
+      "apply": "应用 Schema 变更",
+      "reject": "拒绝提案",
+      "applied": "Schema 提案已应用",
+      "rejected": "Schema 提案已拒绝"
+    },
     "skillSources": {
       "project": "项目",
       "claude": "Claude",

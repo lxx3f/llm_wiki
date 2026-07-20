@@ -55,6 +55,10 @@ export interface DisplayMessage {
   shellCommandApproval?: ChatShellCommandApproval  // resolved Shell authorization boundary for this Agent turn
   /** 旁注：snippet 锚定的子对话数组 */
   annotations?: ChatAnnotation[]
+  /** 仅 annotation.thread 内 message 有此标记；用于 chatMessagesToLLM 过滤 */
+  threadKind?: "annotation"
+  /** 仅 flatten 后写入主 conversation 的 message 有此标记 */
+  flattenedFromAnnotation?: string
 }
 
 interface ChatState {
@@ -103,6 +107,12 @@ interface ChatState {
   setWikiWriteMode: (mode: WikiWriteMode) => void
   setDisabledSkills: (skills: string[]) => void
   removeLastAssistantMessage: () => void  // for regenerate: remove last assistant reply
+
+  // Annotation management
+  createAnnotation: (parentMessageId: string, snippet: string, range?: { start: number; end: number }) => string
+  appendAnnotationMessage: (annotationId: string, role: "user" | "assistant", content: string) => void
+  resolveAnnotation: (annotationId: string) => void
+  flattenAnnotation: (annotationId: string) => string[]
 
   // Helpers
   getActiveMessages: () => DisplayMessage[]
@@ -399,6 +409,107 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: state.messages.filter((m) => m.conversationId !== activeId || m.id !== msgToRemove.id),
       }
     }),
+
+  createAnnotation: (parentMessageId, snippet, range) => {
+    const messages = get().messages
+    const parent = messages.find((m) => m.id === parentMessageId)
+    if (!parent) throw new Error(`parent message not found: ${parentMessageId}`)
+
+    const id = `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const newAnn: ChatAnnotation = {
+      id,
+      parentMessageId,
+      snippet,
+      range,
+      status: "open",
+      createdAt: Date.now(),
+      thread: [],
+    }
+
+    set({
+      messages: messages.map((m) =>
+        m.id === parentMessageId
+          ? { ...m, annotations: [...(m.annotations ?? []), newAnn] }
+          : m
+      ),
+    })
+    return id
+  },
+
+  appendAnnotationMessage: (annotationId, role, content) => {
+    const newMsg: DisplayMessage = {
+      id: nextId(),
+      role,
+      content,
+      timestamp: Date.now(),
+      conversationId: get().activeConversationId ?? "",
+      threadKind: "annotation",
+    }
+    set({
+      messages: get().messages.map((m) => {
+        if (!m.annotations?.some((a) => a.id === annotationId)) return m
+        return {
+          ...m,
+          annotations: m.annotations.map((a) =>
+            a.id === annotationId
+              ? { ...a, thread: [...a.thread, newMsg] }
+              : a
+          ),
+        }
+      }),
+    })
+  },
+
+  resolveAnnotation: (annotationId) => {
+    set({
+      messages: get().messages.map((m) => {
+        if (!m.annotations?.some((a) => a.id === annotationId)) return m
+        return {
+          ...m,
+          annotations: m.annotations.map((a) =>
+            a.id === annotationId && a.status === "open"
+              ? { ...a, status: "resolved" }
+              : a
+          ),
+        }
+      }),
+    })
+  },
+
+  flattenAnnotation: (annotationId) => {
+    const messages = get().messages
+    const parent = messages.find((m) => m.annotations?.some((a) => a.id === annotationId))
+    if (!parent) throw new Error(`annotation not found: ${annotationId}`)
+    const ann = parent.annotations!.find((a) => a.id === annotationId)!
+    if (ann.status === "flattened") return ann.flattenedMessageIds ?? []
+
+    const newIds: string[] = ann.thread.map(() => nextId())
+    const newMainMessages: DisplayMessage[] = ann.thread.map((t, i) => ({
+      ...t,
+      id: newIds[i],
+      conversationId: parent.conversationId,
+      flattenedFromAnnotation: annotationId,
+    }))
+
+    set({
+      messages: [
+        ...messages,
+        ...newMainMessages,
+      ].map((m) =>
+        m.id === parent.id
+          ? {
+              ...m,
+              annotations: m.annotations!.map((a) =>
+                a.id === annotationId
+                  ? { ...a, status: "flattened", flattenedMessageIds: newIds }
+                  : a
+              ),
+            }
+          : m
+      ),
+    })
+    return newIds
+  },
 
   getActiveMessages: () => {
     const { messages, activeConversationId } = get()

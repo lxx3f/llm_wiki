@@ -180,3 +180,93 @@ describe("chat-store conversation isolation", () => {
     ])
   })
 })
+
+describe("annotation CRUD", () => {
+  beforeEach(() => useChatStore.setState({
+    conversations: [], activeConversationId: null, messages: [],
+    isStreaming: false, streamingContent: "",
+  }))
+
+  it("createAnnotation appends to parent message", () => {
+    const store = useChatStore.getState()
+    store.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    store.addMessageToConversation(convId, "assistant", "Long answer A1, A2, A3.")
+    const parentId = useChatStore.getState().messages[0].id
+
+    const annId = store.createAnnotation(parentId, "A1", { start: 13, end: 15 })
+
+    const msg = useChatStore.getState().messages.find(m => m.id === parentId)!
+    expect(msg.annotations).toHaveLength(1)
+    expect(msg.annotations![0].id).toBe(annId)
+    expect(msg.annotations![0].status).toBe("open")
+    expect(msg.annotations![0].snippet).toBe("A1")
+    expect(msg.annotations![0].range).toEqual({ start: 13, end: 15 })
+    expect(msg.annotations![0].thread).toEqual([])
+  })
+
+  it("appendAnnotationMessage pushes into thread", () => {
+    const store = useChatStore.getState()
+    store.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    store.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = store.createAnnotation(parentId, "snippet")
+
+    store.appendAnnotationMessage(annId, "user", "What's A1?")
+    store.appendAnnotationMessage(annId, "assistant", "A1 means ...")
+
+    const ann = useChatStore.getState().messages
+      .find(m => m.id === parentId)!.annotations![0]
+    expect(ann.thread).toHaveLength(2)
+    expect(ann.thread[0].role).toBe("user")
+    expect(ann.thread[1].role).toBe("assistant")
+  })
+
+  it("resolveAnnotation transitions open -> resolved", () => {
+    const store = useChatStore.getState()
+    store.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    store.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = store.createAnnotation(parentId, "snippet")
+
+    store.resolveAnnotation(annId)
+
+    const ann = useChatStore.getState().messages
+      .find(m => m.id === parentId)!.annotations![0]
+    expect(ann.status).toBe("resolved")
+  })
+
+  it("flattenAnnotation copies thread into main conversation and marks flattened", () => {
+    const store = useChatStore.getState()
+    store.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    store.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = store.createAnnotation(parentId, "snippet")
+    store.appendAnnotationMessage(annId, "user", "Q?")
+    store.appendAnnotationMessage(annId, "assistant", "A.")
+
+    const newIds = store.flattenAnnotation(annId)
+
+    const ann = useChatStore.getState().messages
+      .find(m => m.id === parentId)!.annotations![0]
+    expect(ann.status).toBe("flattened")
+    expect(ann.flattenedMessageIds).toEqual(newIds)
+    expect(useChatStore.getState().messages.length).toBeGreaterThanOrEqual(3) // parent + 2 new
+
+    // 主 conversation 末尾的新消息，flattenedFromAnnotation 标记
+    const last2 = useChatStore.getState().messages.slice(-2)
+    expect(last2[0].role).toBe("user")
+    expect(last2[1].role).toBe("assistant")
+    expect((last2[0] as any).flattenedFromAnnotation).toBe(annId)
+    expect((last2[1] as any).flattenedFromAnnotation).toBe(annId)
+  })
+
+  it("createAnnotation throws if parent message not found", () => {
+    expect(() =>
+      useChatStore.getState().createAnnotation("nonexistent", "x")
+    ).toThrow(/parent message not found/)
+  })
+})

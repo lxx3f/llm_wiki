@@ -332,6 +332,35 @@ describe("annotation CRUD", () => {
     // Main conversation is not mutated either.
     expect(useChatStore.getState().messages.length).toBe(totalBefore)
   })
+
+  it("flattened annotation cannot be flattened again", () => {
+    const s = useChatStore.getState()
+    s.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    s.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = s.createAnnotation(parentId, "snippet")
+    s.appendAnnotationMessage(annId, "user", "Q?")
+
+    s.flattenAnnotation(annId)
+    const sizeAfterFirst = useChatStore.getState().messages.length
+    s.flattenAnnotation(annId)
+    expect(useChatStore.getState().messages.length).toBe(sizeAfterFirst)
+  })
+
+  it("re-flattening returns the same message ids without adding new ones", () => {
+    const s = useChatStore.getState()
+    s.createConversation()
+    const convId = useChatStore.getState().activeConversationId!
+    s.addMessageToConversation(convId, "assistant", "Body")
+    const parentId = useChatStore.getState().messages[0].id
+    const annId = s.createAnnotation(parentId, "snippet")
+    s.appendAnnotationMessage(annId, "user", "Q?")
+
+    const firstIds = s.flattenAnnotation(annId)
+    const secondIds = s.flattenAnnotation(annId)
+    expect(secondIds).toEqual(firstIds)
+  })
 })
 
 describe("streamingTargets", () => {

@@ -2988,6 +2988,50 @@ mod tests {
     }
 
     #[test]
+    fn chat_endpoint_payload_accepts_annotation() {
+        // The /api/v1/projects/{id}/chat endpoint deserializes directly into
+        // AgentChatRequest (see handle_chat at the top of this file), so this
+        // test verifies the same JSON shape the endpoint accepts.
+        use crate::agent::types::AnnotationStatus;
+        let json = r#"{
+            "message": "follow-up",
+            "sessionId": "s1",
+            "runId": "r1",
+            "annotation": {
+                "annotationId": "ann_1",
+                "parentMessageId": "msg_1",
+                "parentMessageContent": "Body",
+                "snippet": "x",
+                "thread": [],
+                "status": "open"
+            }
+        }"#;
+        let req: crate::agent::AgentChatRequest = serde_json::from_str(json)
+            .expect("API endpoint payload with annotation should deserialize");
+        let ann = req.annotation.expect("annotation should be Some");
+        assert_eq!(ann.snippet, "x");
+        assert_eq!(ann.parent_message_id, "msg_1");
+        assert_eq!(ann.status, AnnotationStatus::Open);
+        // Discriminate camelCase from default: annotationId requires the
+        // rename_all attribute to deserialize as expected.
+        assert_eq!(ann.annotation_id, "ann_1");
+    }
+
+    #[test]
+    fn chat_endpoint_payload_legacy_without_annotation() {
+        // Backward-compat: legacy API payloads without `annotation` field must
+        // continue to deserialize successfully.
+        let json = r#"{
+            "message": "Q",
+            "sessionId": "s1",
+            "runId": "r1"
+        }"#;
+        let req: crate::agent::AgentChatRequest = serde_json::from_str(json)
+            .expect("Legacy payload without annotation should still deserialize");
+        assert!(req.annotation.is_none());
+    }
+
+    #[test]
     fn api_config_shape_parses_enabled_and_unauthenticated_access() {
         // Standalone pure-function check to mirror what `api_enabled`
         // reads off `load_app_state`. Mirrors the JS-side shape

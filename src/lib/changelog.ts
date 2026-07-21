@@ -26,6 +26,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.0",
+    date: "2026-07-21",
+    highlights: {
+      en: [
+        "Chat Annotation: select text inside a long assistant reply and ask a side-thread question without breaking the main conversation flow. Annotations stay visible inline or collapse into a right drawer for parallel review.",
+        "Three entry points for follow-up: right-click any selection, hover any paragraph, or press Cmd/Ctrl+K. Esc closes inline views.",
+        "Annotation state machine Open → Resolved → Flattened. Flatten writes the Q&A back into the main conversation as a read-only footnote. Stale open annotations auto-resolve after 5 minutes idle.",
+        "Save any annotation as a wiki page: the dialog routes through the existing wiki.write_page flow with confirmation, so all writes go through the controlled pending_writes path.",
+        "MCP read-only tools `llm_wiki_chat_annotation_list` and `chat.annotation.read` are now advertised to MCP clients (currently return `annotation_endpoint_not_implemented`; backend wiring tracked separately).",
+        "Bilingual UI for the entire annotation feature: all user-visible strings have en/zh parity via the new `annotation.*` namespace.",
+      ],
+      zh: [
+        "聊天旁注：在长 agent 回复中选中片段，可在不打断主对话的前提下发起侧线程追问。旁注既可内联折叠，也能切到右侧抽屉并行查看。",
+        "三种追问入口：右键选中文本、按段 hover、或按 Cmd/Ctrl+K；Esc 关闭内联视图。",
+        "旁注状态机 Open → Resolved → Flattened；flatten 把问答回写到主对话末尾只读区。空闲 5 分钟的 open 旁注自动 resolve。",
+        "一键将旁注存为 wiki 页：走现有 wiki.write_page 流程并显示确认卡，所有写入都经由受控的 pending_writes 路径。",
+        "MCP 只读工具 `llm_wiki_chat_annotation_list` 与 `chat.annotation.read` 已注册到 MCP 客户端（当前返回 `annotation_endpoint_not_implemented`；后端接线单独追踪）。",
+        "整套旁注功能上线中英双语界面，所有文案新增 `annotation.*` 命名空间下的 en/zh 一致键。",
+      ],
+    },
+  },
+  {
     version: "0.6.5",
     date: "2026-07-16",
     highlights: {

@@ -1367,13 +1367,18 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       if (useChatStore.getState().isStreaming) {
         return { ok: false, error: t("annotation.saveToWiki.error.busy") }
       }
-      // Set the `wikiPath` backlink eagerly so the Task 6.2 chip
-      // appears as soon as the user confirms. The agent may also
-      // rewrite this field on success — duplicates are fine because
-      // `wikiPath` is a plain string.
-      useChatStore
-        .getState()
-        .saveAnnotationToWiki(annotation.id, targetPath, content)
+      // Defer the `wikiPath` backlink until the Agent turn actually
+      // completes successfully. Setting it eagerly here would make
+      // the Task 6.2 chip appear even when the user cancels at the
+      // `pending_writes` confirmation card or the Agent otherwise
+      // fails to call `wiki.write_page` — leaving a false-positive
+      // chip pointing at a file that was never written.
+      //
+      // `handleSend` rejects when the Agent emits an `error` event
+      // (e.g. tool failure, pending_writes cancel, network error),
+      // and resolves silently on success / clean drain. We only
+      // record the backlink when the promise resolves, never on
+      // reject, so the chip is a truthful indicator of disk state.
       const instruction = buildAnnotationWikiSaveInstruction(
         annotation,
         content,
@@ -1388,6 +1393,9 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
         // confirmation card. The instruction message stays visible
         // in the chat history so the user sees what was requested.
         await handleSend(instruction)
+        useChatStore
+          .getState()
+          .saveAnnotationToWiki(annotation.id, targetPath, content)
         return { ok: true }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)

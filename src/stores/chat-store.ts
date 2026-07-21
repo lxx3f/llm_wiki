@@ -134,6 +134,19 @@ interface ChatState {
   resolveAnnotation: (annotationId: string) => void
   flattenAnnotation: (annotationId: string) => string[]
   setAnnotationDrawerOpen: (messageId: string | null) => void
+  /**
+   * Task 6.1 / 6.2: save annotation to wiki scaffolding.
+   *
+   * Records `wikiPath` on the matching annotation so the inline view
+   * can surface a "📄 已保存" backlink chip (Task 6.2). The actual
+   * file write is intentionally deferred: per project CLAUDE.md, all
+   * wiki writes must route through the Agent's `wiki.write_page` tool
+   * so existing pages get the controlled `pending_writes` confirmation
+   * flow. Wiring that end-to-end is tracked as follow-up work; this
+   * action provides the in-memory state hook so the dialog and chip
+   * UX can ship now.
+   */
+  saveAnnotationToWiki: (annotationId: string, targetPath: string, content: string) => void
 
   // Helpers
   getActiveMessages: () => DisplayMessage[]
@@ -539,6 +552,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setAnnotationDrawerOpen: (messageId) => set({ annotationDrawerOpen: messageId }),
+
+  saveAnnotationToWiki: (annotationId, targetPath, _content) => {
+    // The actual file write is deferred — see the action's signature
+    // docstring. We only persist the backlink path on the annotation
+    // so the inline view (Task 6.2) can render the "📄 已保存" chip.
+    // Callers should still pass the generated markdown through the
+    // store so follow-up work (Agent `wiki.write_page` wiring) has
+    // access to it via the call site without changing the signature.
+    void _content
+    set({
+      messages: get().messages.map((m) => {
+        if (!m.annotations?.some((a) => a.id === annotationId)) return m
+        return {
+          ...m,
+          annotations: m.annotations.map((a) =>
+            a.id === annotationId ? { ...a, wikiPath: targetPath } : a,
+          ),
+        }
+      }),
+    })
+  },
 
   flattenAnnotation: (annotationId) => {
     const messages = get().messages

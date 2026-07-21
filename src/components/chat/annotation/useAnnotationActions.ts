@@ -48,6 +48,14 @@ export interface AnnotationActions {
   ) => void
   resolveAnnotation: (annotationId: string) => void
   flattenAnnotation: (annotationId: string) => string[]
+  /**
+   * Task 6.1: persist a generated wiki markdown payload against the
+   * annotation's `wikiPath` backlink. The actual file write is
+   * deferred (see `ChatState.saveAnnotationToWiki` docstring); this
+   * hook entry-point exists so dialogs and tests can route through
+   * the same adapter rather than touching the store directly.
+   */
+  saveAnnotationToWiki: (annotationId: string, targetPath: string, content: string) => void
 }
 
 export function useAnnotationActions(): AnnotationActions {
@@ -55,6 +63,7 @@ export function useAnnotationActions(): AnnotationActions {
   const appendAnnotationMessage = useChatStore((s) => s.appendAnnotationMessage)
   const resolveAnnotation = useChatStore((s) => s.resolveAnnotation)
   const flattenAnnotation = useChatStore((s) => s.flattenAnnotation)
+  const saveAnnotationToWiki = useChatStore((s) => s.saveAnnotationToWiki)
 
   const createAnnotation = useCallback(
     (args: CreateAnnotationArgs): string | null => {
@@ -74,6 +83,7 @@ export function useAnnotationActions(): AnnotationActions {
     appendAnnotationMessage,
     resolveAnnotation,
     flattenAnnotation,
+    saveAnnotationToWiki,
   }
 }
 

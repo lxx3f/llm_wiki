@@ -39,6 +39,7 @@ import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-ty
 import { AgentFileActivity } from "@/components/chat/agent-file-activity"
 import { ReferenceKnowledgeGraph } from "@/components/chat/reference-knowledge-graph"
 import { PerParagraphTrigger } from "@/components/chat/annotation/PerParagraphTrigger"
+import { splitMarkdownParagraphs } from "./annotation/markdown-paragraphs"
 import { ChatAnnotationInline } from "@/components/chat/annotation/ChatAnnotationInline"
 import type { SaveAnnotationResult } from "@/components/chat/annotation/SaveAnnotationToWikiDialog"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -1763,7 +1764,7 @@ function agentStageIcon(stage: ChatAgentEventStage) {
  * resolution.
  */
 function AssistantParagraphs({ content, parentMessageId }: { content: string; parentMessageId: string }) {
-  const paragraphs = content.split(/\n\n+/)
+  const paragraphs = splitMarkdownParagraphs(content)
   return (
     <div data-message-id={parentMessageId}>
       {paragraphs.map((p, i) => (

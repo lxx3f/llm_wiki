@@ -327,6 +327,49 @@ pub struct AgentConversationMessage {
     pub content: String,
 }
 
+/// Status machine for a side-thread annotation (open → resolved → flattened).
+///
+/// Mirrors the TypeScript `AnnotationStatus` literal in `src/lib/chat-agent-types.ts`.
+/// Serialized as lowercase strings so the JSON contract matches the UI shape.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AnnotationStatus {
+    Open,
+    Resolved,
+    Flattened,
+}
+
+/// Placeholder for the per-turn entry inside an annotation thread.
+///
+/// Task 3.1 only carries an empty thread through the serde contract; the
+/// follow-up tasks (3.3+) that actually format the thread will likely replace
+/// this with a richer `DisplayMessage`-style struct once the Rust ↔ TS shape
+/// is finalized. Keeping the placeholder self-contained here avoids dragging
+/// `commands::chat_types::DisplayMessage` into `agent::types` before that
+/// unification lands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationThreadMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Context passed to the Agent when an annotation follow-up is submitted.
+///
+/// Bundles the snippet anchor, the parent message body the snippet was taken
+/// from, and the prior turns of the annotation thread so the Agent can answer
+/// the user's follow-up without re-reading the whole main conversation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationContext {
+    pub annotation_id: String,
+    pub parent_message_id: String,
+    pub parent_message_content: String,
+    pub snippet: String,
+    pub thread: Vec<AnnotationThreadMessage>,
+    pub status: AnnotationStatus,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +444,31 @@ mod tests {
 
         assert_eq!(req.skills, vec!["reviewer".to_string()]);
         assert_eq!(req.skill_mode, AgentSkillMode::Auto);
+    }
+
+    #[test]
+    fn annotation_status_serializes_lowercase() {
+        let s = serde_json::to_string(&AnnotationStatus::Open).unwrap();
+        assert_eq!(s, "\"open\"");
+        let r: AnnotationStatus = serde_json::from_str("\"resolved\"").unwrap();
+        assert_eq!(r, AnnotationStatus::Resolved);
+        let f: AnnotationStatus = serde_json::from_str("\"flattened\"").unwrap();
+        assert_eq!(f, AnnotationStatus::Flattened);
+    }
+
+    #[test]
+    fn annotation_context_round_trips() {
+        let ctx = AnnotationContext {
+            annotation_id: "ann_1".into(),
+            parent_message_id: "msg_1".into(),
+            parent_message_content: "Body".into(),
+            snippet: "snippet".into(),
+            thread: vec![],
+            status: AnnotationStatus::Open,
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let restored: AnnotationContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.annotation_id, "ann_1");
+        assert_eq!(restored.snippet, "snippet");
     }
 }

@@ -26,6 +26,19 @@ export interface CreateAnnotationArgs {
   range?: { start: number; end: number }
 }
 
+/**
+ * Surface exposed by `useAnnotationActions`. The adapter in `useAnnotationActions`
+ * binds each method to the corresponding Zustand `chat-store` action.
+ *
+ * Note: `createAnnotation` deliberately returns the **created annotation id**
+ * (`string | null`), NOT the full `ChatAnnotation` record. The Task 2.2 stub
+ * originally returned `ChatAnnotation | null`, but the underlying store action
+ * (`src/stores/chat-store.ts:createAnnotation`) returns the id — so the hook
+ * is faithful to the store. Callers that need the full annotation should look
+ * it up via the store (`useChatStore.getState().messages[*].annotations`) using
+ * the returned id; returning the id (rather than the object) also avoids a
+ * second source of truth that could drift from the store's record.
+ */
 export interface AnnotationActions {
   createAnnotation: (args: CreateAnnotationArgs) => string | null
   appendAnnotationMessage: (

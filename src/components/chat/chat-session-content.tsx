@@ -25,6 +25,7 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-types"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { summarizeAgentFileChange } from "@/lib/agent-file-activity"
+import { useAutoResolveAnnotations } from "./annotation/useAnnotationActions"
 
 type InternalChatSendOptions = ChatSendOptions & {
   suppressUserMessage?: boolean
@@ -343,6 +344,10 @@ export interface ChatSessionContentProps {
 
 export function ChatSessionContent({ contextFiles, showConversationControls = false, wikiWriteMode = "confirm", onConfirmedWrite }: ChatSessionContentProps) {
   const { t } = useTranslation()
+  // Mount the auto-resolve timer at the top level so it lives as long as the
+  // chat session content is on screen. The hook returns nothing and uses an
+  // empty-deps effect that is cleared on unmount, so it has zero render cost.
+  useAutoResolveAnnotations()
   useSourceFiles() // Keep source file cache warm
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const isStreaming = useChatStore((s) => s.isStreaming)

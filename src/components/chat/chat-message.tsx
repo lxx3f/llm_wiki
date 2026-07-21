@@ -142,7 +142,7 @@ function ChatMessageImpl({
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
       </div>
-      <div className="max-w-[80%] flex flex-col gap-1.5">
+      <div className="max-w-[80%] min-w-0 flex flex-col gap-1.5">
         {isUser && message.contextFiles && message.contextFiles.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1">
             {message.contextFiles.map((path) => (
@@ -1795,7 +1795,7 @@ function MarkdownContent({ content }: { content: string }) {
     <div>
       {thinking && <ThinkingBlock content={thinking} />}
       <div
-        className="chat-markdown prose prose-sm max-w-none dark:prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
+        className="chat-markdown prose prose-sm max-w-none dark:prose-invert overflow-wrap-anywhere break-words prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
         dir={direction}
         lang={htmlLang}
         style={{ textAlign: "start" }}

@@ -339,17 +339,16 @@ pub enum AnnotationStatus {
     Flattened,
 }
 
-/// Placeholder for the per-turn entry inside an annotation thread.
+/// A single displayed turn inside an annotation thread.
 ///
-/// Task 3.1 only carries an empty thread through the serde contract; the
-/// follow-up tasks (3.3+) that actually format the thread will likely replace
-/// this with a richer `DisplayMessage`-style struct once the Rust ↔ TS shape
-/// is finalized. Keeping the placeholder self-contained here avoids dragging
-/// `commands::chat_types::DisplayMessage` into `agent::types` before that
-/// unification lands.
+/// Task 3.1 only carries the thread through the serde contract; the follow-up
+/// tasks (3.3+) that actually format the thread reference this struct by name
+/// (`crate::agent::types::DisplayMessage`). Keeping it self-contained here
+/// avoids dragging `commands::chat_types` into `agent::types` before the wider
+/// message-shape unification lands.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct AnnotationThreadMessage {
+pub struct DisplayMessage {
     pub role: String,
     pub content: String,
 }
@@ -366,7 +365,7 @@ pub struct AnnotationContext {
     pub parent_message_id: String,
     pub parent_message_content: String,
     pub snippet: String,
-    pub thread: Vec<AnnotationThreadMessage>,
+    pub thread: Vec<DisplayMessage>,
     pub status: AnnotationStatus,
 }
 
@@ -463,12 +462,18 @@ mod tests {
             parent_message_id: "msg_1".into(),
             parent_message_content: "Body".into(),
             snippet: "snippet".into(),
-            thread: vec![],
+            thread: vec![DisplayMessage {
+                role: "user".into(),
+                content: "follow-up".into(),
+            }],
             status: AnnotationStatus::Open,
         };
         let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("\"thread\":[{\"role\":\"user\",\"content\":\"follow-up\"}]"));
         let restored: AnnotationContext = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.annotation_id, "ann_1");
         assert_eq!(restored.snippet, "snippet");
+        assert_eq!(restored.thread.len(), 1);
+        assert_eq!(restored.thread[0].content, "follow-up");
     }
 }

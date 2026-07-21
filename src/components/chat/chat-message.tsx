@@ -19,13 +19,12 @@ import { lastQueryPages } from "@/components/chat/chat-panel"
 import type { DisplayMessage, MessageReference } from "@/stores/chat-store"
 import type { FileNode } from "@/types/wiki"
 
-import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
 import { normalizePath, getFileName, isAbsolutePath } from "@/lib/path-utils"
 import { makeQueryFileName } from "@/lib/wiki-filename"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { messageImageToDataUrl } from "@/lib/chat-image-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
-import { transformImageEmbeds } from "@/lib/wikilink-transform"
+import { processContent } from "./process-content"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { detectLanguage } from "@/lib/detect-language"
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
@@ -1803,8 +1802,21 @@ function MarkdownContent({ content }: { content: string }) {
           rehypePlugins={[rehypeKatex]}
           components={{
             a: ({ href, children }) => {
-              if (href?.startsWith("wikilink:")) {
-                const pageName = href.slice("wikilink:".length)
+              // Wikilink hrefs use `#<encoded-target>` (set by
+              // `transformWikilinks` below) — the in-app renderer
+              // owns the click handler, and `#…` survives React-
+              // Markdown's URL sanitizer (custom schemes like
+              // `wikilink:…` get stripped to "" and break the
+              // branch below).
+              if (href?.startsWith("#")) {
+                let pageName = href.slice(1)
+                try {
+                  pageName = decodeURIComponent(pageName)
+                } catch {
+                  // Fall back to the raw fragment if it's not valid
+                  // percent-encoding; the link still opens whatever
+                  // page matches the un-decoded slug.
+                }
                 return <WikiLink pageName={pageName}>{children}</WikiLink>
               }
               return (
@@ -1950,48 +1962,12 @@ function ThinkingBlock({ content }: { content: string }) {
 }
 
 /**
- * Process content to create clickable links:
- * - [[wikilinks]] → markdown links with wikilink: protocol
+ * `processContent` lives in `./process-content` so it can be
+ * unit-tested without pulling in the rest of this file (which
+ * transitively imports the graph renderer that requires WebGL2).
+ * It rewrites `[[wikilinks]]` to fragment hrefs picked up by the
+ * custom `a` renderer below.
  */
-function processContent(text: string): string {
-  let result = text
-
-  // Rewrite Obsidian image embeds (`![[…]]`) into standard markdown
-  // FIRST — before the `[[…]]` → wikilink conversion below, which
-  // would otherwise mangle the embed target into a broken
-  // `wikilink:` image. Same rule the wiki reader / raw preview use.
-  result = transformImageEmbeds(result)
-
-  // Wrap bare \begin{...}...\end{...} blocks with $$ for remark-math
-  result = result.replace(
-    /(?<!\$\$\s*)(\\begin\{[^}]+\}[\s\S]*?\\end\{[^}]+\})(?!\s*\$\$)/g,
-    (_match, block: string) => `$$\n${block}\n$$`,
-  )
-
-  // Only apply Unicode conversion to text outside of math delimiters
-  // Split on $$...$$ and $...$ blocks, only convert non-math parts
-  const parts = result.split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g)
-  result = parts
-    .map((part) => {
-      if (part.startsWith("$")) return part // preserve math
-      return convertLatexToUnicode(part)
-    })
-    .join("")
-
-  // Fix malformed wikilinks like [[name] (missing closing bracket)
-  result = result.replace(/\[\[([^\]]+)\](?!\])/g, "[[$1]]")
-
-  // Convert [[wikilinks]] to markdown links
-  result = result.replace(
-    /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g,
-    (_match, pageName: string, displayText?: string) => {
-      const display = displayText?.trim() || pageName.trim()
-      return `[${display}](wikilink:${pageName.trim()})`
-    }
-  )
-
-  return result
-}
 
 function WikiLink({ pageName, children }: { pageName: string; children: React.ReactNode }) {
   const project = useWikiStore((s) => s.project)

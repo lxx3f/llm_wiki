@@ -1077,6 +1077,14 @@
       "includeThread": "附加完整 thread",
       "cancel": "取消",
       "confirm": "保存",
+      "saving": "保存中…",
+      "retry": "重试",
+      "error": {
+        "busy": "当前还有对话正在运行，请等待其结束后再试。",
+        "noProject": "尚未打开任何项目，请先打开项目再保存旁注。",
+        "cancelled": "保存已取消，可以再次点击重试。",
+        "failure": "保存旁注失败：{{message}}"
+      },
       "savedBacklink": "📄 已保存"
     },
     "wiki": {

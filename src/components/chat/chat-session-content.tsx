@@ -29,6 +29,9 @@ import { useAnnotationActions, useAutoResolveAnnotations } from "./annotation/us
 import { useAnnotationShortcuts } from "./annotation/useAnnotationShortcuts"
 import { ChatAnnotationDrawer } from "./annotation/ChatAnnotationDrawer"
 import { getSelectionWithin } from "./annotation/selection-utils"
+import { buildAnnotationWikiSaveInstruction } from "@/lib/chat-send-annotation-wiki"
+import type { SaveAnnotationResult } from "./annotation/SaveAnnotationToWikiDialog"
+import type { ChatAnnotation } from "@/lib/chat-agent-types"
 
 type InternalChatSendOptions = ChatSendOptions & {
   suppressUserMessage?: boolean
@@ -1332,6 +1335,69 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     [project, llmConfig, searchApiConfig, addMessageToConversation, setStreaming, appendStreamToken, finalizeStreamForConversation, createConversation, maxHistoryMessages, t, availableSkills, autoOpenSingleGeneratedOutput, wikiWriteMode],
   )
 
+  /**
+   * "Save annotation to wiki" dispatch (Task 6.1 follow-up).
+   *
+   * Routes the actual file write through the existing
+   * `wiki.write_page` Agent tool by issuing an agent turn with a
+   * prepackaged instruction text. The dialog itself stays a thin
+   * presentational layer — it built the markdown + target path, this
+   * callback decides how to dispatch and what shape of result to
+   * return so the dialog can show success / retry UI.
+   *
+   * Failure cases we currently surface:
+   *   - Another agent turn is already in flight (`isStreaming`).
+   *     Returning `{ok:false}` lets the dialog keep the form state
+   *     and show a retry button instead of silently dropping the
+   *     write. Errors raised inside `handleSend` itself are also
+   *     caught and converted into a structured failure.
+   *   - Per-tool errors (wiki.write_page rejecting / pending_writes
+   *     cancel) are surfaced in the chat conversation rather than
+   *     here; the dialog closes once the agent turn drains.
+   */
+  const handleSaveAnnotationToWiki = useCallback(
+    async (
+      annotation: ChatAnnotation,
+      content: string,
+      targetPath: string,
+    ): Promise<SaveAnnotationResult> => {
+      if (!project) {
+        return { ok: false, error: t("annotation.saveToWiki.error.noProject") }
+      }
+      if (useChatStore.getState().isStreaming) {
+        return { ok: false, error: t("annotation.saveToWiki.error.busy") }
+      }
+      // Set the `wikiPath` backlink eagerly so the Task 6.2 chip
+      // appears as soon as the user confirms. The agent may also
+      // rewrite this field on success — duplicates are fine because
+      // `wikiPath` is a plain string.
+      useChatStore
+        .getState()
+        .saveAnnotationToWiki(annotation.id, targetPath, content)
+      const instruction = buildAnnotationWikiSaveInstruction(
+        annotation,
+        content,
+        targetPath,
+      )
+      try {
+        // Use the same default option set as a normal chat turn
+        // (handleSend backfills `useWebSearch` / `agentMode` etc.
+        // from the chat-store). `wikiWriteMode` defaults to "confirm"
+        // via the ChatSessionContent prop — exactly what we want, so
+        // existing pages route through `pending_writes` for a
+        // confirmation card. The instruction message stays visible
+        // in the chat history so the user sees what was requested.
+        await handleSend(instruction)
+        return { ok: true }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return { ok: false, error: message }
+      }
+    },
+    [project, handleSend, t],
+  )
+
+
   const handleStop = useCallback(() => {
     runIdRef.current += 1
     const sessionId = activeRunSessionIdRef.current
@@ -1860,6 +1926,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                             ? () => setOpenDrawerFor(msg.id)
                             : undefined
                         }
+                        onSaveAnnotation={msg.role === "assistant" ? handleSaveAnnotationToWiki : undefined}
                       />
                       {msg.pendingWikiWrite && <WikiWriteConfirmationCard pendingWrite={msg.pendingWikiWrite} onConfirm={() => void handleConfirmPendingWikiWrite(msg.id, msg.pendingWikiWrite!)} onCancel={() => handleCancelPendingWikiWrite(msg.id)} />}
                       {msg.pendingSchemaProposal && (

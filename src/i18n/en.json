@@ -1077,6 +1077,14 @@
       "includeThread": "Include full thread",
       "cancel": "Cancel",
       "confirm": "Save",
+      "saving": "Saving…",
+      "retry": "Retry",
+      "error": {
+        "busy": "Another chat turn is already in progress. Wait for it to finish, then retry.",
+        "noProject": "No project is open. Open a project before saving annotations.",
+        "cancelled": "The save was cancelled. You can retry to try again.",
+        "failure": "Failed to save annotation: {{message}}"
+      },
       "savedBacklink": "📄 Saved"
     },
     "wiki": {

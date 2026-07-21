@@ -32,7 +32,7 @@ import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
 import { inferWikiTypeFromPath } from "@/lib/wiki-page-types"
 import { cleanAssistantContentForWikiSave, titleFromCleanAssistantContent } from "@/lib/chat-save-to-wiki"
-import type { ChatAgentEvent, ChatAgentEventStage, ChatAgentStep, ChatShellCommandApproval, ChatUserInputField, ChatUserInputRequest } from "@/lib/chat-agent-types"
+import type { ChatAgentEvent, ChatAgentEventStage, ChatAgentStep, ChatAnnotation, ChatShellCommandApproval, ChatUserInputField, ChatUserInputRequest } from "@/lib/chat-agent-types"
 import { filterRawSourceTree } from "@/lib/source-filter"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-types"
@@ -40,6 +40,7 @@ import { AgentFileActivity } from "@/components/chat/agent-file-activity"
 import { ReferenceKnowledgeGraph } from "@/components/chat/reference-knowledge-graph"
 import { PerParagraphTrigger } from "@/components/chat/annotation/PerParagraphTrigger"
 import { ChatAnnotationInline } from "@/components/chat/annotation/ChatAnnotationInline"
+import type { SaveAnnotationResult } from "@/components/chat/annotation/SaveAnnotationToWikiDialog"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 
@@ -85,6 +86,17 @@ interface ChatMessageProps {
   onResolveShellCommand?: (command: string, decision: ChatShellCommandApproval["decision"], instructions?: string) => void
   onSubmitUserInput?: (request: ChatUserInputRequest, answers: Record<string, unknown>) => boolean
   onOpenAnnotationDrawer?: () => void
+  /**
+   * Threaded down to `ChatAnnotationInline` so the SaveAnnotationToWikiDialog
+   * can dispatch an Agent turn via the parent's `handleSend`. Supplied by
+   * `ChatSessionContent`; absent in tests / read-only renderers so the
+   * "save to wiki" button hides itself when there's no dispatcher.
+   */
+  onSaveAnnotation?: (
+    annotation: ChatAnnotation,
+    content: string,
+    targetPath: string,
+  ) => SaveAnnotationResult | Promise<SaveAnnotationResult>
 }
 
 export interface ChatReferencePreview {
@@ -104,6 +116,7 @@ function ChatMessageImpl({
   onResolveShellCommand,
   onSubmitUserInput,
   onOpenAnnotationDrawer,
+  onSaveAnnotation,
 }: ChatMessageProps) {
   const isUser = message.role === "user"
   const isSystem = message.role === "system"
@@ -185,7 +198,11 @@ function ChatMessageImpl({
         )}
         {isAssistant &&
           message.annotations?.map((annotation) => (
-            <ChatAnnotationInline key={annotation.id} annotation={annotation} />
+            <ChatAnnotationInline
+              key={annotation.id}
+              annotation={annotation}
+              onSaveAnnotation={onSaveAnnotation}
+            />
           ))}
         {isAssistant && onOpenAnnotationDrawer && (message.annotations?.length ?? 0) > 0 && (
           <button
@@ -443,6 +460,7 @@ export const ChatMessage = memo(ChatMessageImpl, (prev, next) =>
   && prev.onResolveShellCommand === next.onResolveShellCommand
   && prev.onSubmitUserInput === next.onSubmitUserInput
   && prev.onOpenAnnotationDrawer === next.onOpenAnnotationDrawer
+  && prev.onSaveAnnotation === next.onSaveAnnotation
 )
 
 function UserInputRequestPanel({

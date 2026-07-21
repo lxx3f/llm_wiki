@@ -5,19 +5,38 @@
  * parent assistant message (mounted by `chat-message.tsx`).
  * Collapsed by default — the header shows the snippet + status
  * label. Click the header to expand and see the annotation's
- * self-contained thread (Q&A) plus two action buttons:
+ * self-contained thread (Q&A) plus action buttons:
  *
  *   - "✓ 明白了"      → `resolveAnnotation` (disabled when not `open`)
  *   - "插入主会话"   → `flattenAnnotation` (disabled when already `flattened`)
+ *   - "保存为 Wiki"  → opens `SaveAnnotationToWikiDialog`, which routes
+ *                     the actual file write through the Chat Agent's
+ *                     `wiki.write_page` tool (Task 6.1 follow-up)
  */
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 import { useAnnotationActions } from "./useAnnotationActions"
 import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
+import { SaveAnnotationToWikiDialog, type SaveAnnotationResult } from "./SaveAnnotationToWikiDialog"
 
 interface ChatAnnotationInlineProps {
   annotation: ChatAnnotation
+  /**
+   * Optional callback that the parent supplies to handle the
+   * "save annotation to wiki" flow. The dialog already generated the
+   * markdown content + target path; the parent is responsible for
+   * dispatching the Agent turn that calls `wiki.write_page`.
+   *
+   * If absent, the "save to wiki" button is hidden — useful when the
+   * inline view is rendered in a context where the chat dispatch
+   * surface isn't available (e.g. some test pages).
+   */
+  onSaveAnnotation?: (
+    annotation: ChatAnnotation,
+    content: string,
+    targetPath: string,
+  ) => SaveAnnotationResult | Promise<SaveAnnotationResult>
 }
 
 const SNIPPET_PREVIEW_MAX = 30
@@ -31,7 +50,7 @@ function statusColor(status: ChatAnnotation["status"]): string {
   return "text-muted-foreground"
 }
 
-export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) {
+export function ChatAnnotationInline({ annotation, onSaveAnnotation }: ChatAnnotationInlineProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   // Task 5.1: surface a confirmation dialog before flattening so the
@@ -39,6 +58,7 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
   // `flattenAnnotation` is idempotent, so the dialog doesn't need
   // to pre-check status — re-flattening is a no-op.
   const [showFlattenDialog, setShowFlattenDialog] = useState(false)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
   const { resolveAnnotation, flattenAnnotation } = useAnnotationActions()
 
   const snippet = annotation.snippet
@@ -48,6 +68,7 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
       : snippet
 
   const toggleLabel = open ? t("annotation.toggle.collapse") : t("annotation.toggle.expand")
+  const canSaveToWiki = Boolean(onSaveAnnotation) && annotation.status !== "flattened"
 
   return (
     <div className="my-1 border-l-2 border-blue-300 pl-2">
@@ -104,6 +125,17 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
             >
               {t("annotation.action.flatten")}
             </button>
+            {canSaveToWiki && (
+              <button
+                type="button"
+                onClick={() => setShowSaveDialog(true)}
+                disabled={annotation.status === "flattened"}
+                className="rounded border border-border bg-background px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="save-annotation-to-wiki-trigger"
+              >
+                {t("annotation.action.saveToWiki")}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -116,6 +148,14 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
           setShowFlattenDialog(false)
         }}
       />
+      {onSaveAnnotation && (
+        <SaveAnnotationToWikiDialog
+          annotation={annotation}
+          open={showSaveDialog}
+          onClose={() => setShowSaveDialog(false)}
+          onSave={onSaveAnnotation}
+        />
+      )}
     </div>
   )
 }

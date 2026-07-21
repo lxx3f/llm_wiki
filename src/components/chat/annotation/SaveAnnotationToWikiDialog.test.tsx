@@ -1,19 +1,16 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, render, fireEvent } from "@testing-library/react"
+//
+// SaveAnnotationToWikiDialog (Task 6.1+): routes the confirm click through
+// an `onSave` callback so the parent owns dispatching the actual
+// `wiki.write_page` agent turn (instead of the legacy in-memory
+// `saveAnnotationToWiki` chip-only stub). The dialog itself stays a thin
+// presentational layer — title / includeSnippet / includeThread toggles,
+// target-path sanitization, and markdown-content generation — and only
+// emits the prepared payload upward.
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { cleanup, render, fireEvent, waitFor } from "@testing-library/react"
+import i18n from "@/i18n"
 import { SaveAnnotationToWikiDialog } from "./SaveAnnotationToWikiDialog"
-
-const mockSave = vi.fn()
-
-vi.mock("./useAnnotationActions", () => ({
-  useAnnotationActions: () => ({
-    createAnnotation: vi.fn(),
-    appendAnnotationMessage: vi.fn(),
-    resolveAnnotation: vi.fn(),
-    flattenAnnotation: vi.fn(),
-    saveAnnotationToWiki: mockSave,
-  }),
-}))
 
 const annotation = {
   id: "ann_1",
@@ -28,9 +25,27 @@ const annotation = {
 }
 
 describe("SaveAnnotationToWikiDialog", () => {
+  // The dialog uses `useTranslation()` for every visible string plus
+  // its localized error copy. Without initializing i18n here the keys
+  // show up verbatim (`annotation.saveToWiki.failure`, etc.), which
+  // makes it impossible to assert against the "{{message}}" error
+  // placeholder or the retry-button copy. We switch to the Chinese
+  // bundle (same as `ChatAnnotationInline.test.tsx`) so we can grep
+  // for any Chinese substring without colliding with English keys.
+  beforeAll(async () => {
+    await i18n.changeLanguage("zh")
+  })
+
+  // Defensive cleanup: restore the default English language so the
+  // singleton i18next instance doesn't leak the zh switch into
+  // other test files when vitest is configured with shared module
+  // cache (e.g. `pool: "forks"` with cache).
+  afterAll(async () => {
+    await i18n.changeLanguage("en")
+  })
+
   afterEach(() => {
     cleanup()
-    mockSave.mockReset()
   })
 
   it("renders nothing when open is false", () => {
@@ -39,6 +54,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         annotation={annotation}
         open={false}
         onClose={() => {}}
+        onSave={async () => ({ ok: true })}
       />,
     )
     expect(container.firstChild).toBeNull()
@@ -50,6 +66,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         annotation={annotation}
         open
         onClose={() => {}}
+        onSave={async () => ({ ok: true })}
       />,
     )
     const input = container.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
@@ -63,6 +80,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         annotation={annotation}
         open
         onClose={() => {}}
+        onSave={async () => ({ ok: true })}
       />,
     )
     const input = container.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
@@ -76,6 +94,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         annotation={annotation}
         open
         onClose={() => {}}
+        onSave={async () => ({ ok: true })}
       />,
     )
     const checkboxes = container.querySelectorAll("input[type='checkbox']")
@@ -91,30 +110,37 @@ describe("SaveAnnotationToWikiDialog", () => {
 
   it("calls onClose when cancel is clicked and does not call save", () => {
     const onClose = vi.fn()
+    const onSave = vi.fn().mockResolvedValue({ ok: true })
     render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
         onClose={onClose}
+        onSave={onSave}
       />,
     )
     fireEvent.click(document.body.querySelector("button[data-role='cancel']")!)
     expect(onClose).toHaveBeenCalledTimes(1)
-    expect(mockSave).not.toHaveBeenCalled()
+    expect(onSave).not.toHaveBeenCalled()
   })
 
-  it("calls saveAnnotationToWiki with targetPath, wikiPath, and markdown when confirm is clicked", () => {
+  it("calls onSave with annotation + sanitized targetPath + markdown when confirm is clicked", async () => {
+    const onClose = vi.fn()
+    const onSave = vi.fn().mockResolvedValue({ ok: true })
     render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
-        onClose={() => {}}
+        onClose={onClose}
+        onSave={onSave}
       />,
     )
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
-    expect(mockSave).toHaveBeenCalledTimes(1)
-    const [annotationId, targetPath, content] = mockSave.mock.calls[0]
-    expect(annotationId).toBe("ann_1")
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    const [passedAnnotation, content, targetPath] = onSave.mock.calls[0]
+    // The dialog forwards the same annotation reference so the parent
+    // can capture thread / parentMessageId without re-deriving them.
+    expect(passedAnnotation).toBe(annotation)
     expect(targetPath).toContain("wiki/")
     expect(targetPath.endsWith(".md")).toBe(true)
     // frontmatter
@@ -129,53 +155,121 @@ describe("SaveAnnotationToWikiDialog", () => {
     expect(content).toContain("> annotation snippet preview text")
   })
 
-  it("includes thread content when includeThread is checked", () => {
+  it("closes the dialog after a successful save resolves", async () => {
+    const onClose = vi.fn()
+    const onSave = vi.fn().mockResolvedValue({ ok: true })
+    render(
+      <SaveAnnotationToWikiDialog
+        annotation={annotation}
+        open
+        onClose={onClose}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it("includes thread content when includeThread is checked", async () => {
+    const onSave = vi.fn().mockResolvedValue({ ok: true })
     const { container } = render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
         onClose={() => {}}
+        onSave={onSave}
       />,
     )
     const threadCheckbox = container.querySelectorAll("input[type='checkbox']")[1]
     fireEvent.click(threadCheckbox)
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
-    const content = mockSave.mock.calls[0][2]
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    const content = onSave.mock.calls[0][1]
     expect(content).toContain("user")
     expect(content).toContain("Q?")
     expect(content).toContain("assistant")
     expect(content).toContain("A.")
   })
 
-  it("omits the snippet quote when includeSnippet is unchecked", () => {
+  it("omits the snippet quote when includeSnippet is unchecked", async () => {
+    const onSave = vi.fn().mockResolvedValue({ ok: true })
     const { container } = render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
         onClose={() => {}}
+        onSave={onSave}
       />,
     )
     const snippetCheckbox = container.querySelectorAll("input[type='checkbox']")[0]
     fireEvent.click(snippetCheckbox)
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
-    const content = mockSave.mock.calls[0][2]
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    const content = onSave.mock.calls[0][1]
     expect(content).not.toContain("> annotation snippet preview text")
   })
 
-  it("uses a sanitized targetPath when the title contains special characters", () => {
+  it("uses a sanitized targetPath when the title contains special characters", async () => {
+    const onSave = vi.fn().mockResolvedValue({ ok: true })
     const { container } = render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
         onClose={() => {}}
+        onSave={onSave}
       />,
     )
     const input = container.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
     fireEvent.change(input, { target: { value: "Hello / World?" } })
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
-    const targetPath: string = mockSave.mock.calls[0][1]
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    const targetPath: string = onSave.mock.calls[0][2]
     // No slashes (path traversal) or query chars in the filename stem
     expect(targetPath).not.toContain("/World")
     expect(targetPath).not.toContain("?")
+  })
+
+  it("surfaces an error message and retry button when onSave rejects", async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error("network failure"))
+    const { container, findByText } = render(
+      <SaveAnnotationToWikiDialog
+        annotation={annotation}
+        open
+        onClose={() => {}}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
+    // Dialog should stay open and show an error notice. The localized
+    // Chinese copy says "保存旁注失败：..." so we look for the
+    // "保存旁注失败" prefix instead of the raw error message
+    // (which goes through i18n interpolation and could be split across
+    // text nodes).
+    const errorNotice = await findByText(/保存旁注失败/)
+    expect(errorNotice).toBeTruthy()
+    // Confirm-button is replaced by a retry button when an error is
+    // surfaced. Assert the retry button is present and labeled with
+    // the localized "重试" copy.
+    const retryButton = container.querySelector("button[data-role='retry']")
+    expect(retryButton).toBeTruthy()
+    expect(retryButton?.textContent).toMatch(/重试/)
+  })
+
+  it("does not auto-close when onSave rejects", async () => {
+    const onClose = vi.fn()
+    const onSave = vi.fn().mockRejectedValue(new Error("boom"))
+    render(
+      <SaveAnnotationToWikiDialog
+        annotation={annotation}
+        open
+        onClose={onClose}
+        onSave={onSave}
+      />,
+    )
+    fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
+    // Yield so the rejected promise can settle.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

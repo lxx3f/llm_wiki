@@ -72,6 +72,12 @@ interface BackendAgentEventPayload {
     pendingWrite?: ChatPendingWikiWrite
     proposal?: ChatSchemaProposal
     memory?: ChatMemoryProposal
+    /**
+     * When set, the event belongs to an annotation follow-up turn and must
+     * route to that annotation's thread instead of the main conversation.
+     * Mirrors the Rust `annotation_id` field on `AgentEvent`.
+     */
+    annotationId?: string
   }
 }
 
@@ -98,6 +104,44 @@ export let lastQueryPages: { title: string; path: string }[] = []
 const AGENT_STREAM_IDLE_TIMEOUT_MS = 8 * 60 * 1000
 const AGENT_SKILL_STREAM_IDLE_TIMEOUT_MS = 15 * 60 * 1000
 const MAX_AGENT_ACTIVITY_SNAPSHOT_CHARS = 512_000
+
+/**
+ * Result of routing a single agent event for an annotation follow-up.
+ * - `handled` is true when the event was consumed by the annotation stream
+ *   (so the main-conversation handler should skip it).
+ * - `finishedStream` is true when the event was a terminal `done` and the
+ *   caller should resolve its own stream promise / clear its timeout.
+ *
+ * Extracted from the inline `streamUnlisten` callback so unit tests can
+ * exercise the branch without mocking the full Tauri `listen()` machinery.
+ */
+export type AnnotationRouteResult = { handled: true; finishedStream: boolean }
+
+export function routeAgentEventToAnnotation(
+  agentEvent: BackendAgentEventPayload["event"],
+  store: Pick<ReturnType<typeof useChatStore.getState>, "streamingTargets" | "appendAnnotationMessage" | "startAnnotationStream" | "endAnnotationStream">,
+): AnnotationRouteResult | { handled: false } {
+  if (!agentEvent.annotationId) return { handled: false }
+  const annotationId = agentEvent.annotationId
+  // Lazy-start: when the first event for this annotation arrives, register
+  // it as a streaming target so the UI can show it as in-flight. Mirrors the
+  // `startMainStream()` behavior on the main branch but per-annotation.
+  if (!store.streamingTargets.annotations.has(annotationId)) {
+    store.startAnnotationStream(annotationId)
+  }
+  if (agentEvent.type === "done") {
+    store.endAnnotationStream(annotationId)
+    return { handled: true, finishedStream: true }
+  }
+  // Extract textual content from the event for the annotation thread.
+  // Main-conversation deltas use `text`; older `output` / `message` fallbacks
+  // are accepted so we never silently drop a payload.
+  const text = agentEvent.text ?? agentEvent.message ?? agentEvent.output ?? ""
+  if (text) {
+    store.appendAnnotationMessage(annotationId, "assistant", text)
+  }
+  return { handled: true, finishedStream: false }
+}
 
 async function readAgentActivitySnapshot(path: string): Promise<string | null> {
   try {
@@ -772,6 +816,22 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             if (payload.sessionId !== convId || payload.runId !== backendRunId || !isCurrentRun()) return
             resetStreamTimeout()
             const agentEvent = payload.event
+            // Route events for an annotation follow-up to the annotation
+            // thread instead of the main conversation. This is the converse
+            // of the main-conversation handlers below; events with
+            // annotationId never affect main messages or main stream
+            // completion. The shared stream timeout still resets above so an
+            // annotation run keeps the main connection alive while the
+            // helper also drives its own start/end on first/last event.
+            const annotationRoute = routeAgentEventToAnnotation(agentEvent, useChatStore.getState())
+            if (annotationRoute.handled) {
+              if (annotationRoute.finishedStream && !streamFinished) {
+                streamFinished = true
+                clearStreamTimeout()
+                resolveStream?.()
+              }
+              return
+            }
             if (agentEvent.type === "done") {
               if (!streamFinished) {
                 streamFinished = true

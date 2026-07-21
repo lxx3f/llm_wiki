@@ -105,11 +105,6 @@ export function SaveAnnotationToWikiDialog({
     // The wiki write itself is deferred — see file header. Until the
     // Agent `wiki.write_page` wiring lands, this only updates the
     // annotation's `wikiPath` field so the Task 6.2 chip can render.
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[SaveAnnotationToWikiDialog] Wiki write deferred — TODO: route through pending_writes",
-      { annotationId: annotation.id, targetPath, contentBytes: content.length },
-    )
     saveAnnotationToWiki(annotation.id, targetPath, content)
     onClose()
   }

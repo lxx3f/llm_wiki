@@ -83,6 +83,17 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
               {message.content}
             </div>
           ))}
+          {annotation.wikiPath && (
+            <a
+              href={`llm-wiki://${annotation.wikiPath}`}
+              target="_blank"
+              rel="noreferrer"
+              // TODO(i18n): → `annotation.wiki.saved`
+              className="text-xs text-blue-600 hover:underline"
+            >
+              📄 已保存
+            </a>
+          )}
           <div className="mt-1 flex gap-2">
             <button
               type="button"

@@ -61,6 +61,24 @@ describe("ChatAnnotationInline", () => {
     expect(getByText(/A\./)).toBeTruthy()
   })
 
+  it("renders a wiki backlink chip only when wikiPath is set", () => {
+    const annotationWithWikiPath = {
+      ...annotation,
+      wikiPath: "wiki/notes/x.md",
+    }
+    const { getByText, queryByText, rerender } = render(
+      <ChatAnnotationInline annotation={annotationWithWikiPath} />
+    )
+
+    fireEvent.click(getByText(/展开/).closest("button")!)
+    const chip = getByText("📄 已保存").closest("a")
+    expect(chip).toBeTruthy()
+    expect(chip?.getAttribute("href")).toBe("llm-wiki://wiki/notes/x.md")
+
+    rerender(<ChatAnnotationInline annotation={annotation} />)
+    expect(queryByText("📄 已保存")).toBeNull()
+  })
+
   it("'插入主会话' opens the flatten confirmation dialog instead of flattening directly", () => {
     // Task 5.1: clicking the flatten button must NOT call
     // `flattenAnnotation` directly — it must surface the

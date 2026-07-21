@@ -122,14 +122,29 @@ async fn agent_start_turn(
     .with_enhanced_shell_mode(runtime_config.enhanced_shell_mode);
     let user_message = request.message.clone();
     let persist_session = request.persist_session;
-    let cancellation = app
-        .state::<agent::cancel::AgentCancellationRegistry>()
-        .start(&project.id, &active_session_id, &active_run_id);
+    // Annotation-scoped turns get their own cancellation token so cancelling
+    // one snippet follow-up never kills the main conversation or sibling
+    // annotations in the same session. Capture the id up front because
+    // `request` is moved into `run_once_with_cancel`.
+    let annotation_id = request.annotation.as_ref().map(|ann| ann.annotation_id.clone());
+    let cancellation = match annotation_id.as_deref() {
+        Some(ann_id) => app
+            .state::<agent::cancel::AgentCancellationRegistry>()
+            .start_annotation(&project.id, &active_session_id, ann_id),
+        None => app
+            .state::<agent::cancel::AgentCancellationRegistry>()
+            .start(&project.id, &active_session_id, &active_run_id),
+    };
     let result = runtime
         .run_once_with_cancel(request, Some(cancellation))
         .await;
-    app.state::<agent::cancel::AgentCancellationRegistry>()
-        .finish(&project.id, &active_session_id, &active_run_id);
+    if let Some(ann_id) = annotation_id.as_deref() {
+        app.state::<agent::cancel::AgentCancellationRegistry>()
+            .finish_annotation(&project.id, &active_session_id, ann_id);
+    } else {
+        app.state::<agent::cancel::AgentCancellationRegistry>()
+            .finish(&project.id, &active_session_id, &active_run_id);
+    }
     let response = result?;
     if persist_session {
         app.state::<agent::session::AgentSessionStore>()
@@ -543,9 +558,20 @@ async fn agent_start_turn_stream(
     let run_for_task = active_run_id.clone();
     let user_message = request.message.clone();
     let persist_session = request.persist_session;
-    let cancellation = app
-        .state::<agent::cancel::AgentCancellationRegistry>()
-        .start(&project.id, &active_session_id, &active_run_id);
+    // Annotation-scoped streams get their own cancellation token so a
+    // snippet follow-up can be aborted without killing the parent
+    // conversation. Capture the id before moving `request`, then clone it
+    // again so the spawned task can move its own copy into `finish`.
+    let annotation_id_for_task = request.annotation.as_ref().map(|ann| ann.annotation_id.clone());
+    let annotation_id_for_finish = annotation_id_for_task.clone();
+    let cancellation = match annotation_id_for_task.as_deref() {
+        Some(ann_id) => app
+            .state::<agent::cancel::AgentCancellationRegistry>()
+            .start_annotation(&project.id, &active_session_id, ann_id),
+        None => app
+            .state::<agent::cancel::AgentCancellationRegistry>()
+            .start(&project.id, &active_session_id, &active_run_id),
+    };
     tauri::async_runtime::spawn(async move {
         let emit_app = app_for_task.clone();
         let emit_session = session_for_task.clone();
@@ -563,9 +589,15 @@ async fn agent_start_turn_stream(
         let result = runtime
             .run_once_with_cancel_and_events(request, Some(cancellation), Some(sink))
             .await;
-        app_for_task
-            .state::<agent::cancel::AgentCancellationRegistry>()
-            .finish(&project_for_task.id, &session_for_task, &run_for_task);
+        if let Some(ann_id) = annotation_id_for_finish.as_deref() {
+            app_for_task
+                .state::<agent::cancel::AgentCancellationRegistry>()
+                .finish_annotation(&project_for_task.id, &session_for_task, ann_id);
+        } else {
+            app_for_task
+                .state::<agent::cancel::AgentCancellationRegistry>()
+                .finish(&project_for_task.id, &session_for_task, &run_for_task);
+        }
         match result {
             Ok(response) => {
                 if persist_session {

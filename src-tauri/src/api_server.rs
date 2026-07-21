@@ -2048,13 +2048,27 @@ fn handle_chat(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
     let persist_session = req.persist_session;
     let session_id = req.session_id.clone().unwrap_or_default();
     let run_id = req.run_id.clone().unwrap_or_default();
-    let cancellation = app
-        .state::<agent::cancel::AgentCancellationRegistry>()
-        .start(&project.id, &session_id, &run_id);
+    // Annotation-scoped turns get their own cancellation token so cancelling
+    // a snippet follow-up never aborts the main conversation or sibling
+    // annotations in the same session.
+    let annotation_id = req.annotation.as_ref().map(|ann| ann.annotation_id.clone());
+    let cancellation = match annotation_id.as_deref() {
+        Some(ann_id) => app
+            .state::<agent::cancel::AgentCancellationRegistry>()
+            .start_annotation(&project.id, &session_id, ann_id),
+        None => app
+            .state::<agent::cancel::AgentCancellationRegistry>()
+            .start(&project.id, &session_id, &run_id),
+    };
     let result =
         tauri::async_runtime::block_on(runtime.run_once_with_cancel(req, Some(cancellation)));
-    app.state::<agent::cancel::AgentCancellationRegistry>()
-        .finish(&project.id, &session_id, &run_id);
+    if let Some(ann_id) = annotation_id.as_deref() {
+        app.state::<agent::cancel::AgentCancellationRegistry>()
+            .finish_annotation(&project.id, &session_id, ann_id);
+    } else {
+        app.state::<agent::cancel::AgentCancellationRegistry>()
+            .finish(&project.id, &session_id, &run_id);
+    }
     match result {
         Ok(mut response) => {
             if persist_session {

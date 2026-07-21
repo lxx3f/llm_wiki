@@ -39,6 +39,7 @@ import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-ty
 import { AgentFileActivity } from "@/components/chat/agent-file-activity"
 import { ReferenceKnowledgeGraph } from "@/components/chat/reference-knowledge-graph"
 import { PerParagraphTrigger } from "@/components/chat/annotation/PerParagraphTrigger"
+import { ChatAnnotationInline } from "@/components/chat/annotation/ChatAnnotationInline"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 
@@ -179,6 +180,10 @@ function ChatMessageImpl({
             )}
           </div>
         )}
+        {isAssistant &&
+          message.annotations?.map((annotation) => (
+            <ChatAnnotationInline key={annotation.id} annotation={annotation} />
+          ))}
         {isAssistant && (
           <CitedReferencesPanel
             content={message.content}

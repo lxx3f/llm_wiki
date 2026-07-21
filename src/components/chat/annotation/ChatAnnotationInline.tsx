@@ -17,6 +17,7 @@
 import { useState } from "react"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 import { useAnnotationActions } from "./useAnnotationActions"
+import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
 
 interface ChatAnnotationInlineProps {
   annotation: ChatAnnotation
@@ -42,6 +43,11 @@ function statusColor(status: ChatAnnotation["status"]): string {
 
 export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) {
   const [open, setOpen] = useState(false)
+  // Task 5.1: surface a confirmation dialog before flattening so the
+  // user can preview what will be inserted. The store's
+  // `flattenAnnotation` is idempotent, so the dialog doesn't need
+  // to pre-check status — re-flattening is a no-op.
+  const [showFlattenDialog, setShowFlattenDialog] = useState(false)
   const { resolveAnnotation, flattenAnnotation } = useAnnotationActions()
 
   const snippet = annotation.snippet
@@ -90,7 +96,7 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
             <button
               type="button"
               // TODO(i18n): → `annotation.action.flatten`
-              onClick={() => flattenAnnotation(annotation.id)}
+              onClick={() => setShowFlattenDialog(true)}
               disabled={annotation.status === "flattened"}
               className="rounded border border-border bg-background px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -99,6 +105,15 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
           </div>
         </div>
       )}
+      <ChatAnnotationFlattenDialog
+        annotation={annotation}
+        open={showFlattenDialog}
+        onClose={() => setShowFlattenDialog(false)}
+        onConfirm={() => {
+          flattenAnnotation(annotation.id)
+          setShowFlattenDialog(false)
+        }}
+      />
     </div>
   )
 }

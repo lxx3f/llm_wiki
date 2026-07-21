@@ -60,4 +60,24 @@ describe("ChatAnnotationInline", () => {
     expect(getByText(/Q\?/)).toBeTruthy()
     expect(getByText(/A\./)).toBeTruthy()
   })
+
+  it("'插入主会话' opens the flatten confirmation dialog instead of flattening directly", () => {
+    // Task 5.1: clicking the flatten button must NOT call
+    // `flattenAnnotation` directly — it must surface the
+    // confirmation dialog first, and only the dialog's confirm
+    // button calls flatten.
+    const { getByText, queryByText } = render(
+      <ChatAnnotationInline annotation={annotation} />,
+    )
+    // Expand so the action buttons render.
+    fireEvent.click(getByText(/展开/).closest("button")!)
+    // Sanity: the dialog is closed initially.
+    expect(queryByText(/插入主会话/)).toBeTruthy()
+    // Click the flatten button — its visible text is exactly "插入主会话".
+    const flattenButton = getByText("插入主会话").closest("button")!
+    fireEvent.click(flattenButton)
+    // The dialog (which also contains the "插入主会话" header)
+    // should now be mounted — no direct call to flatten yet.
+    expect(mockFlatten).not.toHaveBeenCalled()
+  })
 })

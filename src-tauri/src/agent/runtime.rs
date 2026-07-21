@@ -1321,17 +1321,34 @@ impl AgentRuntime {
         let explicit_files =
             load_explicit_context_files(&self.project_path, &request.context_files).await;
         let built_context = fit_context_to_model(
-            build_agent_context(AgentContextInput {
-                query: message,
-                project: &project_context,
-                router: &router,
-                history: &request.history,
-                skills: &skills,
-                skill_mode: request.skill_mode,
-                references: &references,
-                retrieval_summary: &retrieval_summary,
-                explicit_files: &explicit_files,
-            }),
+            if let Some(ann) = &request.annotation {
+                crate::agent::context::build_agent_context_with_annotation(
+                    AgentContextInput {
+                        query: message,
+                        project: &project_context,
+                        router: &router,
+                        history: &request.history,
+                        skills: &skills,
+                        skill_mode: request.skill_mode,
+                        references: &references,
+                        retrieval_summary: &retrieval_summary,
+                        explicit_files: &explicit_files,
+                    },
+                    ann,
+                )
+            } else {
+                build_agent_context(AgentContextInput {
+                    query: message,
+                    project: &project_context,
+                    router: &router,
+                    history: &request.history,
+                    skills: &skills,
+                    skill_mode: request.skill_mode,
+                    references: &references,
+                    retrieval_summary: &retrieval_summary,
+                    explicit_files: &explicit_files,
+                })
+            },
             self.llm_config.as_ref(),
         );
 
@@ -1607,17 +1624,34 @@ impl AgentRuntime {
             );
             let built_context = fit_context_to_model(
                 {
-                    let mut ctx = build_agent_context(AgentContextInput {
-                        query: message,
-                        project: &project_context,
-                        router: &router,
-                        history: &request.history,
-                        skills: &skills,
-                        skill_mode: request.skill_mode,
-                        references: &references,
-                        retrieval_summary: "",
-                        explicit_files: &explicit_files,
-                    });
+                    let mut ctx = if let Some(ann) = &request.annotation {
+                        crate::agent::context::build_agent_context_with_annotation(
+                            AgentContextInput {
+                                query: message,
+                                project: &project_context,
+                                router: &router,
+                                history: &request.history,
+                                skills: &skills,
+                                skill_mode: request.skill_mode,
+                                references: &references,
+                                retrieval_summary: "",
+                                explicit_files: &explicit_files,
+                            },
+                            ann,
+                        )
+                    } else {
+                        build_agent_context(AgentContextInput {
+                            query: message,
+                            project: &project_context,
+                            router: &router,
+                            history: &request.history,
+                            skills: &skills,
+                            skill_mode: request.skill_mode,
+                            references: &references,
+                            retrieval_summary: "",
+                            explicit_files: &explicit_files,
+                        })
+                    };
                     if !memory_block.is_empty() {
                         ctx.system.push_str(&memory_block);
                     }

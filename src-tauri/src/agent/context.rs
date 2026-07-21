@@ -3,7 +3,7 @@ use std::path::{Component, Path};
 
 use super::router::{QueryIntent, RouterDecision};
 use super::skills::AgentSkill;
-use super::types::{AgentConversationMessage, AgentReference, AgentSkillMode};
+use super::types::{AgentConversationMessage, AgentReference, AgentSkillMode, AnnotationContext};
 use super::workspace::agent_workspace_display;
 
 const MAX_OVERVIEW_CHARS: usize = 8_000;
@@ -59,6 +59,116 @@ pub fn build_agent_context(input: AgentContextInput<'_>) -> BuiltAgentContext {
         system: build_system_context(input.project, input.router, input.skills, input.skill_mode),
         user: build_user_context(input),
     }
+}
+
+/// Wraps `build_agent_context` to inject annotation follow-up framing
+/// into both system and user prompt. Annotation block is appended to
+/// system AFTER normal system content (so it is not subject to the
+/// main system budget trim). User prompt is REPLACED with the
+/// annotation-mode variant that puts snippet + parent message first.
+pub fn build_agent_context_with_annotation(
+    input: AgentContextInput<'_>,
+    ann: &AnnotationContext,
+) -> BuiltAgentContext {
+    // Capture references to the user-context fields before `input` is moved
+    // into `build_agent_context`; we still need them for the annotation
+    // user prompt below.
+    let query = input.query;
+    let history = input.history;
+    let explicit_files = input.explicit_files;
+    let retrieval_summary = input.retrieval_summary;
+    let mut built = build_agent_context(input);
+    let extra = build_annotation_block(ann);
+    built.system.push_str("\n\n");
+    built.system.push_str(&extra);
+    built.user = build_annotation_user_context(
+        query,
+        ann,
+        history,
+        explicit_files,
+        retrieval_summary,
+    );
+    built
+}
+
+/// Construct the "Annotation Follow-up" guidance block that is appended to
+/// the system prompt when the Agent answers a side-thread annotation.
+///
+/// The block is concatenated to the main system string by
+/// `build_agent_context_with_annotation` so it never participates in the
+/// main system budget trim — preserving the anchor-on-snippet instruction.
+pub fn build_annotation_block(ann: &AnnotationContext) -> String {
+    format!(
+        "## Annotation Follow-up\n\
+         Anchor on the highlighted snippet first; expand to the parent\n\
+         message only if the snippet's reference is unclear.\n\n\
+         ### Parent message (full):\n{}\n\n\
+         ### Highlighted snippet:\n> {}\n\n\
+         ### Annotation thread so far ({} turns):\n{}\n\n\
+         Reply in the language the user uses in their follow-up.",
+        ann.parent_message_content,
+        ann.snippet,
+        ann.thread.len(),
+        format_annotation_thread(&ann.thread),
+    )
+}
+
+/// Construct the user prompt for the annotation follow-up path.
+///
+/// Differs from `build_user_context` in that the snippet + parent message
+/// come first as context, then the user's follow-up question is the final
+/// section the model is asked to answer.
+pub fn build_annotation_user_context(
+    query: &str,
+    ann: &AnnotationContext,
+    history: &[AgentConversationMessage],
+    explicit_files: &[(String, String)],
+    retrieval_summary: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("### Highlighted snippet\n> {}\n\n", ann.snippet));
+    out.push_str(&format!(
+        "### Original parent message\n{}\n\n",
+        ann.parent_message_content
+    ));
+    if !retrieval_summary.is_empty() {
+        out.push_str(&format!(
+            "### Retrieval summary\n{}\n\n",
+            retrieval_summary
+        ));
+    }
+    if !explicit_files.is_empty() {
+        out.push_str("### Explicit context files\n");
+        for (path, body) in explicit_files {
+            out.push_str(&format!("--- {} ---\n{}\n\n", path, body));
+        }
+    }
+    for msg in history {
+        out.push_str(&format!(
+            "[{}] {}\n",
+            if msg.role == "user" { "user" } else { "assistant" },
+            msg.content
+        ));
+    }
+    out.push_str(&format!("\n### User follow-up\n{}\n", query));
+    out
+}
+
+fn format_annotation_thread(thread: &[crate::agent::types::DisplayMessage]) -> String {
+    if thread.is_empty() {
+        return "(no prior turns in this annotation)".into();
+    }
+    thread
+        .iter()
+        .map(|m| {
+            format!(
+                "- [{}] {}",
+                if m.role == "user" { "user" } else { "assistant" },
+                m.content
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn build_system_context(
@@ -651,5 +761,44 @@ mod tests {
     #[test]
     fn trim_chars_is_utf8_safe() {
         assert_eq!(trim_chars("煤矿安全治理", 5), "煤矿...");
+    }
+}
+
+#[cfg(test)]
+mod tests_annotation {
+    use super::*;
+    use crate::agent::types::{AnnotationContext, AnnotationStatus};
+
+    #[test]
+    fn build_annotation_block_includes_parent_snippet_and_thread_marker() {
+        let ann = AnnotationContext {
+            annotation_id: "ann_1".into(),
+            parent_message_id: "msg_1".into(),
+            parent_message_content: "Parent body content".into(),
+            snippet: "highlighted".into(),
+            thread: vec![],
+            status: AnnotationStatus::Open,
+        };
+        let block = build_annotation_block(&ann);
+        assert!(block.contains("Annotation Follow-up"));
+        assert!(block.contains("Parent body content"));
+        assert!(block.contains("> highlighted"));
+        assert!(block.contains("Annotation thread so far"));
+    }
+
+    #[test]
+    fn build_user_context_includes_snippet_when_annotation_present() {
+        let ann = AnnotationContext {
+            annotation_id: "ann_1".into(),
+            parent_message_id: "msg_1".into(),
+            parent_message_content: "Long parent".into(),
+            snippet: "anchor".into(),
+            thread: vec![],
+            status: AnnotationStatus::Open,
+        };
+        let user_prompt = build_annotation_user_context("What's anchor?", &ann, &[], &[], "");
+        assert!(user_prompt.contains("anchor"));
+        assert!(user_prompt.contains("Long parent"));
+        assert!(user_prompt.contains("What's anchor?"));
     }
 }

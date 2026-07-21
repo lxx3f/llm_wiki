@@ -500,6 +500,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"annotation\""));
         assert!(json.contains("\"snippet\":\"x\""));
+        assert!(
+            json.contains("\"parentMessageId\":\"msg_1\""),
+            "AnnotationContext should serialize multi-word fields as camelCase: {json}"
+        );
         assert!(req.annotation.is_some());
     }
 

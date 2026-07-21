@@ -163,6 +163,11 @@ pub struct AgentChatRequest {
     pub shell_command: Option<String>,
     #[serde(default)]
     pub images: Vec<AgentImage>,
+    /// Optional annotation follow-up context. When present, the chat request is
+    /// a follow-up turn on a side-thread annotation (snippet + parent message
+    /// + prior thread turns) rather than a fresh main-conversation message.
+    #[serde(default)]
+    pub annotation: Option<AnnotationContext>,
     #[serde(default)]
     pub stream: Option<bool>,
     #[serde(default = "default_true")]
@@ -198,6 +203,7 @@ impl Default for AgentChatRequest {
             approved_shell_commands: Vec::new(),
             shell_command: None,
             images: Vec::new(),
+            annotation: None,
             stream: None,
             persist_session: true,
             allow_unlimited_iterations: false,
@@ -475,5 +481,31 @@ mod tests {
         assert_eq!(restored.snippet, "snippet");
         assert_eq!(restored.thread.len(), 1);
         assert_eq!(restored.thread[0].content, "follow-up");
+    }
+
+    #[test]
+    fn chat_request_accepts_annotation_context() {
+        let req = AgentChatRequest {
+            message: "Q".into(),
+            annotation: Some(AnnotationContext {
+                annotation_id: "ann_1".into(),
+                parent_message_id: "msg_1".into(),
+                parent_message_content: "Body".into(),
+                snippet: "x".into(),
+                thread: vec![],
+                status: AnnotationStatus::Open,
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"annotation\""));
+        assert!(json.contains("\"snippet\":\"x\""));
+        assert!(req.annotation.is_some());
+    }
+
+    #[test]
+    fn chat_request_default_has_no_annotation() {
+        let req = AgentChatRequest::default();
+        assert!(req.annotation.is_none());
     }
 }

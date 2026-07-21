@@ -113,4 +113,26 @@ describe("routeAgentEventToAnnotation", () => {
     expect(startAnnotationStream).not.toHaveBeenCalled()
     expect(appendAnnotationMessage).not.toHaveBeenCalled()
   })
+
+  it("falls back from text to message to output in order", () => {
+    // No `text` → `message` is used
+    const { store, appendAnnotationMessage } = makeStore({
+      annotationsInFlight: new Set(["ann_1"]),
+    })
+    const a = routeAgentEventToAnnotation(
+      { type: "routing", annotationId: "ann_1", message: "from-message" },
+      store,
+    )
+    expect(a).toEqual({ handled: true, finishedStream: false })
+    expect(appendAnnotationMessage).toHaveBeenCalledWith("ann_1", "assistant", "from-message")
+
+    // Only `output` (no `text`, no `message`) → `output` is used
+    appendAnnotationMessage.mockClear()
+    const b = routeAgentEventToAnnotation(
+      { type: "toolEnd", annotationId: "ann_1", output: "from-output" },
+      store,
+    )
+    expect(b).toEqual({ handled: true, finishedStream: false })
+    expect(appendAnnotationMessage).toHaveBeenCalledWith("ann_1", "assistant", "from-output")
+  })
 })

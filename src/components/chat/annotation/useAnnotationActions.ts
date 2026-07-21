@@ -39,6 +39,13 @@ export interface CreateAnnotationArgs {
  * the returned id; returning the id (rather than the object) also avoids a
  * second source of truth that could drift from the store's record.
  */
+export interface AskAnnotationQuestionArgs {
+  parentMessageId: string
+  snippet: string
+  range?: { start: number; end: number }
+  question: string
+}
+
 export interface AnnotationActions {
   createAnnotation: (args: CreateAnnotationArgs) => string | null
   appendAnnotationMessage: (
@@ -56,6 +63,14 @@ export interface AnnotationActions {
    * the same adapter rather than touching the store directly.
    */
   saveAnnotationToWiki: (annotationId: string, targetPath: string, content: string) => void
+  /**
+   * Combined annotation-question dispatch (Phase 7.x): creates the
+   * annotation row, appends the user's question, and invokes the
+   * backend Agent with `annotation` context so the stream listener
+   * routes events to the annotation thread. Returns the new
+   * annotation id, or `null` if creation was rejected.
+   */
+  askAnnotationQuestion: (args: AskAnnotationQuestionArgs) => string | null
 }
 
 export function useAnnotationActions(): AnnotationActions {
@@ -64,6 +79,7 @@ export function useAnnotationActions(): AnnotationActions {
   const resolveAnnotation = useChatStore((s) => s.resolveAnnotation)
   const flattenAnnotation = useChatStore((s) => s.flattenAnnotation)
   const saveAnnotationToWiki = useChatStore((s) => s.saveAnnotationToWiki)
+  const storeAskAnnotationQuestion = useChatStore((s) => s.askAnnotationQuestion)
 
   const createAnnotation = useCallback(
     (args: CreateAnnotationArgs): string | null => {
@@ -78,12 +94,29 @@ export function useAnnotationActions(): AnnotationActions {
     [storeCreateAnnotation],
   )
 
+  const askAnnotationQuestion = useCallback(
+    (args: AskAnnotationQuestionArgs): string | null => {
+      try {
+        return storeAskAnnotationQuestion(args)
+      } catch {
+        // Same swallow-and-return-null pattern as `createAnnotation`:
+        // the parent message may have been pruned while the user was
+        // typing in the popover. The annotation stays empty in the
+        // store; the user can re-trigger from the (still rendered)
+        // parent message.
+        return null
+      }
+    },
+    [storeAskAnnotationQuestion],
+  )
+
   return {
     createAnnotation,
     appendAnnotationMessage,
     resolveAnnotation,
     flattenAnnotation,
     saveAnnotationToWiki,
+    askAnnotationQuestion,
   }
 }
 

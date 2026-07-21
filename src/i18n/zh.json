@@ -1093,6 +1093,12 @@
     "shortcut": {
       "k": "Cmd/Ctrl+K",
       "shiftA": "Cmd/Ctrl+Shift+A"
+    },
+    "question": {
+      "placeholder": "针对这段追问…",
+      "cancel": "取消",
+      "send": "发送",
+      "snippetLabel": "片段"
     }
   }
 }

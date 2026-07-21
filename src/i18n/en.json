@@ -1093,6 +1093,12 @@
     "shortcut": {
       "k": "Cmd/Ctrl+K",
       "shiftA": "Cmd/Ctrl+Shift+A"
+    },
+    "question": {
+      "placeholder": "Ask a follow-up about this snippet…",
+      "cancel": "Cancel",
+      "send": "Send",
+      "snippetLabel": "Snippet"
     }
   }
 }

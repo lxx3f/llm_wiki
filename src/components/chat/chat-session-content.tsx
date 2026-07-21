@@ -28,6 +28,7 @@ import { summarizeAgentFileChange } from "@/lib/agent-file-activity"
 import { useAnnotationActions, useAutoResolveAnnotations } from "./annotation/useAnnotationActions"
 import { useAnnotationShortcuts } from "./annotation/useAnnotationShortcuts"
 import { ChatAnnotationDrawer } from "./annotation/ChatAnnotationDrawer"
+import { ChatAnnotationQuestionInput } from "./annotation/ChatAnnotationQuestionInput"
 import { getSelectionWithin } from "./annotation/selection-utils"
 import { buildAnnotationWikiSaveInstruction } from "@/lib/chat-send-annotation-wiki"
 import type { SaveAnnotationResult } from "./annotation/SaveAnnotationToWikiDialog"
@@ -399,7 +400,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   // empty-deps effect that is cleared on unmount, so it has zero render cost.
   useAutoResolveAnnotations()
   useSourceFiles() // Keep source file cache warm
-  const { createAnnotation } = useAnnotationActions()
+  const { askAnnotationQuestion } = useAnnotationActions()
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const streamingContent = useChatStore((s) => s.streamingContent)
@@ -487,6 +488,19 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   // Research pane to avoid two right-pane surfaces appearing side-by-side.
   const openDrawerFor = useChatStore((s) => s.annotationDrawerOpen)
   const setOpenDrawerFor = useChatStore((s) => s.setAnnotationDrawerOpen)
+  // Cmd+K popover state. Lives at the ChatSessionContent level (not
+  // inside useAnnotationShortcuts) so the popover can render even when
+  // the keyboard hook has been torn down by a re-mount. We anchor it
+  // at the end-bounding-rect of the current selection when Cmd+K is
+  // pressed; if no selection is present the shortcut no-ops (matches
+  // the spec: "user selects text, hits Cmd+K, types question").
+  const [keyboardPopover, setKeyboardPopover] = useState<{
+    anchor: { x: number; y: number }
+    parentMessageId: string
+    snippet: string
+    range: { start: number; end: number }
+  } | null>(null)
+
   // Wire the annotation keyboard shortcuts (Cmd/Ctrl+K creates an
   // annotation from the current selection; Cmd/Ctrl+Shift+A toggles
   // the annotation drawer). The hook only fans out keyboard intent;
@@ -496,9 +510,10 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     onCreate: () => {
       // Cmd+K: capture the current window selection, find the parent
       // assistant message via the closest `[data-message-id]` ancestor
-      // (set by AssistantParagraphs in chat-message.tsx), and create
-      // an annotation bound to it. Mirrors the right-click trigger
-      // path (ChatAnnotationTrigger) but driven by the keyboard.
+      // (set by AssistantParagraphs in chat-message.tsx), and open the
+      // question popover anchored at the end of the selection rect.
+      // Submission dispatches the same `askAnnotationQuestion` action
+      // as the right-click / per-paragraph paths.
       const sel = typeof window !== "undefined" ? window.getSelection() : null
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
       const startContainer = sel.getRangeAt(0).startContainer
@@ -512,7 +527,12 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       if (!parentMessageId) return
       const within = getSelectionWithin(parentEl as HTMLElement)
       if (!within) return
-      createAnnotation({
+      const range = sel.getRangeAt(0).getBoundingClientRect()
+      setKeyboardPopover({
+        anchor: {
+          x: Math.min(window.innerWidth - 340, Math.max(8, range.left)),
+          y: Math.min(window.innerHeight - 140, range.bottom + 4),
+        },
         parentMessageId,
         snippet: within.snippet,
         range: within.range,
@@ -2034,6 +2054,21 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           onClose={() => setGeneratedOutputPreview(null)}
         />
       )}
+      <ChatAnnotationQuestionInput
+        anchor={keyboardPopover?.anchor ?? null}
+        snippet={keyboardPopover?.snippet ?? ""}
+        onSubmit={(question) => {
+          if (!keyboardPopover) return
+          askAnnotationQuestion({
+            parentMessageId: keyboardPopover.parentMessageId,
+            snippet: keyboardPopover.snippet,
+            range: keyboardPopover.range,
+            question,
+          })
+          setKeyboardPopover(null)
+        }}
+        onCancel={() => setKeyboardPopover(null)}
+      />
     </div>
   )
 }

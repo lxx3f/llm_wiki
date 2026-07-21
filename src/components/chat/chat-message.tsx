@@ -1746,22 +1746,17 @@ function agentStageIcon(stage: ChatAgentEventStage) {
 }
 
 /**
- * Renders assistant content split by blank lines into paragraphs.
+ * Render assistant content split into paragraphs by `splitMarkdownParagraphs`,
+ * which respects fenced code blocks (``` and ~~~) so blank lines inside a fence
+ * do not count as paragraph breaks. Each paragraph is wrapped in a `group relative`
+ * container so the per-paragraph hover trigger remains anchored to that specific
+ * paragraph. The trigger creates an annotation bound to the whole paragraph text —
+ * no selection required.
  *
- * Each paragraph is wrapped in a `group relative` container so the
- * `PerParagraphTrigger` button (which uses Tailwind's
- * `group-hover:` opacity utility) only appears while the user is
- * hovering that specific paragraph. The trigger creates an
- * annotation bound to the whole paragraph text — no selection
- * required — complementing the right-click "follow up" entry on
- * `ChatAnnotationTrigger` (which targets a selected snippet).
- *
- * Splitting on `\n\n+` matches the markdown blank-line paragraph
- * separator. A single-paragraph message collapses to one wrapper
- * with no visible change to existing layout. Citations are still
- * extracted from the full `content` in `CitedReferencesPanel`, so
- * the per-paragraph split only affects rendering, not reference
- * resolution.
+ * A single-paragraph message collapses to one wrapper with no visible
+ * change to existing layout. Citations are still extracted from the
+ * full `content` in `CitedReferencesPanel`, so the per-paragraph split
+ * only affects rendering, not reference resolution.
  */
 function AssistantParagraphs({ content, parentMessageId }: { content: string; parentMessageId: string }) {
   const paragraphs = splitMarkdownParagraphs(content)

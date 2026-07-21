@@ -12,6 +12,7 @@
  *     presentations stay byte-for-byte identical).
  */
 import { useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { DisplayMessage } from "@/stores/chat-store"
 import { ChatAnnotationList } from "./ChatAnnotationList"
 import { ChatAnnotationInline } from "./ChatAnnotationInline"
@@ -37,6 +38,7 @@ export function ChatAnnotationDrawer({
   onClose,
   width = DEFAULT_DRAWER_WIDTH,
 }: ChatAnnotationDrawerProps) {
+  const { t } = useTranslation()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const annotations = message.annotations ?? []
   const selected = annotations.find((annotation) => annotation.id === selectedId) ?? null
@@ -47,18 +49,18 @@ export function ChatAnnotationDrawer({
     <aside
       className="flex h-full shrink-0 flex-col border-l bg-background"
       style={{ width }}
-      aria-label="Annotation drawer"
+      aria-label={t("annotation.drawer.title", { count: annotations.length })}
     >
       <header className="flex min-h-10 items-center justify-between gap-2 border-b px-3 py-2">
-        {/* TODO(i18n): → `annotation.drawer.title` in Task 7.3. */}
-        <span className="text-xs font-medium">Annotations ({annotations.length})</span>
+        <span className="text-xs font-medium">
+          {t("annotation.drawer.title", { count: annotations.length })}
+        </span>
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close drawer"
+          aria-label={t("annotation.drawer.close")}
           className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          {/* TODO(i18n): → `annotation.drawer.close` in Task 7.3. */}
           ×
         </button>
       </header>
@@ -76,8 +78,7 @@ export function ChatAnnotationDrawer({
           </div>
         ) : annotations.length > 0 ? (
           <div className="mt-3 rounded border border-dashed border-border/60 px-2 py-3 text-center text-[11px] text-muted-foreground">
-            {/* TODO(i18n): → `annotation.drawer.promptSelect` in Task 7.3. */}
-            选择左侧条目查看详情
+            {t("annotation.drawer.promptSelect")}
           </div>
         ) : null}
       </div>

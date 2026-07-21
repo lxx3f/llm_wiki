@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { cleanup, render, fireEvent } from "@testing-library/react"
+import i18n from "@/i18n"
 import { ChatAnnotationInline } from "./ChatAnnotationInline"
 
 const mockResolve = vi.fn()
@@ -28,6 +29,13 @@ const annotation = {
 }
 
 describe("ChatAnnotationInline", () => {
+  // Switch the i18n bundle to Chinese for these tests so the `t()`
+  // calls in `ChatAnnotationInline` resolve to the same Chinese
+  // strings the assertions below expect (e.g. "展开", "📄 已保存").
+  beforeAll(async () => {
+    await i18n.changeLanguage("zh")
+  })
+
   // Explicit `cleanup` between tests — the project has no global
   // testing-library setup and `@testing-library/react` v16 no
   // longer auto-cleans, so without this the second test sees the

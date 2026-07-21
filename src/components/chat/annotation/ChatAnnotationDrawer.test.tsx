@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { cleanup, render, fireEvent } from "@testing-library/react"
+import i18n from "@/i18n"
 import { ChatAnnotationDrawer } from "./ChatAnnotationDrawer"
 import type { DisplayMessage } from "@/stores/chat-store"
 
@@ -45,6 +46,14 @@ const message: DisplayMessage = {
 }
 
 describe("ChatAnnotationDrawer", () => {
+  // Switch the i18n bundle to Chinese so the `t()` calls in
+  // `ChatAnnotationDrawer` / `ChatAnnotationInline` resolve to the
+  // same Chinese strings the assertions expect (e.g. "旁注",
+  // "展开").
+  beforeAll(async () => {
+    await i18n.changeLanguage("zh")
+  })
+
   // Explicit `cleanup` between tests — the project has no global
   // testing-library setup and `@testing-library/react` v16 no
   // longer auto-cleans.
@@ -63,7 +72,7 @@ describe("ChatAnnotationDrawer", () => {
     expect(getByText(/A1/)).toBeTruthy()
     expect(getByText(/A2/)).toBeTruthy()
     // Header reflects total count.
-    expect(getByText(/Annotations \(2\)/)).toBeTruthy()
+    expect(getByText(/旁注 \(2\)/)).toBeTruthy()
   })
 
   it("selects an annotation and shows its inline view", () => {

@@ -10,6 +10,7 @@
  * — making it independently testable without depending on
  * ChatAnnotationInline / ChatAnnotationDrawer.
  */
+import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 
 export interface ChatAnnotationListProps {
@@ -35,11 +36,11 @@ function snippetPreview(snippet: string): string {
 }
 
 export function ChatAnnotationList({ annotations, selectedId, onSelect }: ChatAnnotationListProps) {
+  const { t } = useTranslation()
   if (annotations.length === 0) {
     return (
       <div className="rounded border border-dashed border-border/60 px-2 py-3 text-center text-[11px] text-muted-foreground">
-        {/* TODO(i18n): move to `annotation.list.empty` in Task 7.3. */}
-        还没有追问
+        {t("annotation.list.empty")}
       </div>
     )
   }
@@ -64,12 +65,7 @@ export function ChatAnnotationList({ annotations, selectedId, onSelect }: ChatAn
                 {snippetPreview(annotation.snippet)}
               </span>
               <span className="shrink-0 text-[10px] text-muted-foreground">
-                {/* TODO(i18n): → `annotation.status.*` keys in Task 7.3. */}
-                {annotation.status === "open"
-                  ? "追问中"
-                  : annotation.status === "resolved"
-                    ? "已解决"
-                    : "已压平"}
+                {t(`annotation.status.${annotation.status}`)}
               </span>
             </button>
           </li>

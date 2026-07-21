@@ -1027,5 +1027,64 @@
     "minutesAgo": "{{count}} min ago",
     "hoursAgo": "{{count}} h ago",
     "daysAgo": "{{count}} d ago"
+  },
+  "annotation": {
+    "menu": {
+      "contextPrompt": "Ask separately about this"
+    },
+    "status": {
+      "open": "Open",
+      "resolved": "Resolved",
+      "flattened": "Flattened"
+    },
+    "action": {
+      "resolve": "✓ Got it",
+      "flatten": "Insert into main conversation",
+      "openInDrawer": "Open in drawer",
+      "openDrawer": "Open annotation drawer"
+    },
+    "toggle": {
+      "expand": "Expand",
+      "collapse": "Collapse"
+    },
+    "role": {
+      "user": "Q",
+      "assistant": "A"
+    },
+    "drawer": {
+      "title": "Annotations ({{count}})",
+      "close": "Close drawer",
+      "promptSelect": "Select an annotation from the list to see details.",
+      "toggleLabel": "View all annotations ({{count}})"
+    },
+    "list": {
+      "empty": "No annotations yet"
+    },
+    "flatten": {
+      "previewSummary": "Preview summary",
+      "title": "Insert into main conversation",
+      "description": "This will insert {{count}} messages from the annotation into the end of the main conversation.",
+      "previewLabel": "Preview (first {{count}} chars)",
+      "cancel": "Cancel",
+      "confirm": "Insert"
+    },
+    "saveToWiki": {
+      "title": "Save annotation to wiki",
+      "description": "Generate a new Wiki page based on this annotation.",
+      "titleLabel": "Title",
+      "path": "Path",
+      "includeSnippet": "Include snippet as quote",
+      "includeThread": "Include full thread",
+      "cancel": "Cancel",
+      "confirm": "Save",
+      "savedBacklink": "📄 Saved"
+    },
+    "wiki": {
+      "saved": "📄 Saved"
+    },
+    "shortcut": {
+      "k": "Cmd/Ctrl+K",
+      "shiftA": "Cmd/Ctrl+Shift+A"
+    }
   }
 }

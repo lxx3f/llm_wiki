@@ -9,12 +9,9 @@
  *
  *   - "✓ 明白了"      → `resolveAnnotation` (disabled when not `open`)
  *   - "插入主会话"   → `flattenAnnotation` (disabled when already `flattened`)
- *
- * Note: per the project CLAUDE.md i18n guideline, the strings
- * below are inlined as Chinese with a TODO marker until Task 7.3
- * formalizes the `annotation.*` namespace in `src/i18n/locales/{en,zh}.json`.
  */
 import { useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 import { useAnnotationActions } from "./useAnnotationActions"
 import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
@@ -24,13 +21,6 @@ interface ChatAnnotationInlineProps {
 }
 
 const SNIPPET_PREVIEW_MAX = 30
-
-function statusLabel(status: ChatAnnotation["status"]): string {
-  // TODO(i18n): move to `annotation.status.*` keys in Task 7.3.
-  if (status === "open") return "追问中"
-  if (status === "resolved") return "已解决"
-  return "已压平"
-}
 
 function statusColor(status: ChatAnnotation["status"]): string {
   // Slight color cue so users can tell at a glance whether an
@@ -42,6 +32,7 @@ function statusColor(status: ChatAnnotation["status"]): string {
 }
 
 export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   // Task 5.1: surface a confirmation dialog before flattening so the
   // user can preview what will be inserted. The store's
@@ -56,8 +47,7 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
       ? `${snippet.slice(0, SNIPPET_PREVIEW_MAX)}…`
       : snippet
 
-  // TODO(i18n): move to `annotation.toggle.expand` / `.collapse` in Task 7.3.
-  const toggleLabel = open ? "收起" : "展开"
+  const toggleLabel = open ? t("annotation.toggle.collapse") : t("annotation.toggle.expand")
 
   return (
     <div className="my-1 border-l-2 border-blue-300 pl-2">
@@ -72,14 +62,18 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
         // snippet + status remain visible to AT users.
         className={`text-xs hover:underline ${statusColor(annotation.status)}`}
       >
-        💬 {snippetPreview} · {statusLabel(annotation.status)} · {toggleLabel}
+        💬 {snippetPreview} · {t(`annotation.status.${annotation.status}`)} · {toggleLabel}
       </button>
       {open && (
         <div className="mt-2 space-y-1 text-sm">
           {annotation.thread.map((message) => (
             <div key={message.id}>
-              {/* TODO(i18n): Q/A role prefix → `annotation.role.user/assistant` */}
-              <strong>{message.role === "user" ? "Q" : "A"}:</strong>{" "}
+              <strong>
+                {message.role === "user"
+                  ? t("annotation.role.user")
+                  : t("annotation.role.assistant")}
+                :
+              </strong>{" "}
               {message.content}
             </div>
           ))}
@@ -88,30 +82,27 @@ export function ChatAnnotationInline({ annotation }: ChatAnnotationInlineProps) 
               href={`llm-wiki://${annotation.wikiPath}`}
               target="_blank"
               rel="noreferrer"
-              // TODO(i18n): → `annotation.wiki.saved`
               className="text-xs text-blue-600 hover:underline"
             >
-              📄 已保存
+              {t("annotation.wiki.saved")}
             </a>
           )}
           <div className="mt-1 flex gap-2">
             <button
               type="button"
-              // TODO(i18n): → `annotation.action.resolve`
               onClick={() => resolveAnnotation(annotation.id)}
               disabled={annotation.status !== "open"}
               className="rounded border border-border bg-background px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
             >
-              ✓ 明白了
+              {t("annotation.action.resolve")}
             </button>
             <button
               type="button"
-              // TODO(i18n): → `annotation.action.flatten`
               onClick={() => setShowFlattenDialog(true)}
               disabled={annotation.status === "flattened"}
               className="rounded border border-border bg-background px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
             >
-              插入主会话
+              {t("annotation.action.flatten")}
             </button>
           </div>
         </div>

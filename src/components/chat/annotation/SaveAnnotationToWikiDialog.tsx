@@ -13,12 +13,9 @@
  *   `pending_writes` confirmation. That end-to-end path is a follow-up task;
  *   the dialog is intentionally a thin UI scaffold today so the Task 6.2
  *   backlink chip has a real `wikiPath` to render.
- *
- * i18n: per CLAUDE.md, user-visible strings stay inlined as Chinese with
- * `TODO(i18n)` markers until Task 7.3 promotes them to the
- * `annotation.saveToWiki.*` namespace.
  */
 import { useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 import { useAnnotationActions } from "./useAnnotationActions"
 
@@ -91,6 +88,7 @@ export function SaveAnnotationToWikiDialog({
   open,
   onClose,
 }: SaveAnnotationToWikiDialogProps) {
+  const { t } = useTranslation()
   const [title, setTitle] = useState(() => annotation.snippet.slice(0, TITLE_DEFAULT_MAX))
   const [includeSnippet, setIncludeSnippet] = useState(true)
   const [includeThread, setIncludeThread] = useState(false)
@@ -101,10 +99,10 @@ export function SaveAnnotationToWikiDialog({
   const handleSave = () => {
     const targetPath = buildTargetPath(title)
     const content = buildMarkdownContent(annotation, title, includeSnippet, includeThread)
-    // TODO(i18n): wire error / confirmation toast in Task 7.3.
-    // The wiki write itself is deferred — see file header. Until the
+    // Note: the wiki write itself is deferred — see file header. Until the
     // Agent `wiki.write_page` wiring lands, this only updates the
     // annotation's `wikiPath` field so the Task 6.2 chip can render.
+    // A user-facing toast can be wired up in a follow-up.
     saveAnnotationToWiki(annotation.id, targetPath, content)
     onClose()
   }
@@ -113,19 +111,13 @@ export function SaveAnnotationToWikiDialog({
     <dialog
       open
       data-testid="save-annotation-to-wiki-dialog"
-      // TODO(i18n): → `annotation.saveToWiki.title`
-      aria-label="保存为 Wiki 页面"
+      aria-label={t("annotation.saveToWiki.title")}
       className="rounded border border-border bg-background p-4 text-sm shadow-md w-[420px]"
     >
-      {/* TODO(i18n): → `annotation.saveToWiki.title` */}
-      <h3 className="text-base font-medium">保存为 Wiki 页面</h3>
-      {/* TODO(i18n): → `annotation.saveToWiki.description` */}
-      <p className="mt-2 text-muted-foreground">
-        将基于这条旁注生成一个新的 Wiki 页面。
-      </p>
+      <h3 className="text-base font-medium">{t("annotation.saveToWiki.title")}</h3>
+      <p className="mt-2 text-muted-foreground">{t("annotation.saveToWiki.description")}</p>
       <label className="mt-3 block">
-        {/* TODO(i18n): → `annotation.saveToWiki.titleLabel` */}
-        <span className="text-xs">标题</span>
+        <span className="text-xs">{t("annotation.saveToWiki.titleLabel")}</span>
         <input
           type="text"
           value={title}
@@ -140,8 +132,7 @@ export function SaveAnnotationToWikiDialog({
             checked={includeSnippet}
             onChange={(e) => setIncludeSnippet(e.target.checked)}
           />
-          {/* TODO(i18n): → `annotation.saveToWiki.includeSnippet` */}
-          附加 snippet 引用
+          {t("annotation.saveToWiki.includeSnippet")}
         </label>
         <label className="flex items-center gap-2 text-xs">
           <input
@@ -149,28 +140,25 @@ export function SaveAnnotationToWikiDialog({
             checked={includeThread}
             onChange={(e) => setIncludeThread(e.target.checked)}
           />
-          {/* TODO(i18n): → `annotation.saveToWiki.includeThread` */}
-          附加完整 thread
+          {t("annotation.saveToWiki.includeThread")}
         </label>
       </div>
       <div className="mt-3 flex gap-2">
         <button
           type="button"
           data-role="cancel"
-          // TODO(i18n): → `annotation.saveToWiki.cancel`
           onClick={onClose}
           className="rounded border border-border bg-background px-3 py-1 text-xs"
         >
-          取消
+          {t("annotation.saveToWiki.cancel")}
         </button>
         <button
           type="button"
           data-role="confirm"
-          // TODO(i18n): → `annotation.saveToWiki.confirm`
           onClick={handleSave}
           className="rounded border border-blue-500 bg-blue-500 px-3 py-1 text-xs text-white"
         >
-          保存
+          {t("annotation.saveToWiki.confirm")}
         </button>
       </div>
     </dialog>

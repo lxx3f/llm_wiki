@@ -109,6 +109,7 @@ function ChatMessageImpl({
   const isSystem = message.role === "system"
   const isAssistant = message.role === "assistant"
   const [hovered, setHovered] = useState(false)
+  const { t } = useTranslation()
 
   return (
     <div
@@ -191,11 +192,11 @@ function ChatMessageImpl({
             type="button"
             onClick={onOpenAnnotationDrawer}
             className="self-start inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-            // TODO(i18n): → `annotation.action.openDrawer` in Task 7.3.
-            title="Open annotation drawer"
+            title={t("annotation.action.openDrawer")}
           >
-            {/* TODO(i18n): → `annotation.drawer.toggleLabel` in Task 7.3. */}
-            查看全部旁注 ({message.annotations?.length ?? 0})
+            {t("annotation.drawer.toggleLabel", {
+              count: message.annotations?.length ?? 0,
+            })}
           </button>
         )}
         {isAssistant && (

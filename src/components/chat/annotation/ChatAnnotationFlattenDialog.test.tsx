@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { cleanup, render, fireEvent, screen } from "@testing-library/react"
+import i18n from "@/i18n"
 import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
 
 const annotation = {
@@ -16,6 +17,13 @@ const annotation = {
 }
 
 describe("ChatAnnotationFlattenDialog", () => {
+  // Switch the i18n bundle to Chinese so the `t()` calls in
+  // `ChatAnnotationFlattenDialog` resolve to the same Chinese strings
+  // (e.g. "确认", "取消") that the button-name assertions expect.
+  beforeAll(async () => {
+    await i18n.changeLanguage("zh")
+  })
+
   // Explicit `cleanup` between tests — the project has no global
   // testing-library setup and `@testing-library/react` v16 no
   // longer auto-cleans.

@@ -8,11 +8,8 @@
  * The store action `flattenAnnotation` is idempotent — re-flattening a
  * flattened annotation is a no-op — so the dialog does not need to
  * pre-check status; the store handles dedup on the call site.
- *
- * Note: per the project CLAUDE.md i18n guideline, the user-visible
- * strings are inlined as Chinese with `TODO(i18n)` markers until
- * Task 7.3 formalizes the `annotation.*` namespace.
  */
+import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 
 const PREVIEW_MAX_CHARS = 200
@@ -30,10 +27,10 @@ export function ChatAnnotationFlattenDialog({
   onClose,
   onConfirm,
 }: ChatAnnotationFlattenDialogProps) {
+  const { t } = useTranslation()
   if (!open) return null
 
   const messageCount = annotation.thread.length
-  // TODO(i18n): → `annotation.flatten.previewSummary` in Task 7.3.
   const preview = annotation.thread
     .map((m) => `${m.role}: ${m.content}`)
     .join("\n")
@@ -42,19 +39,15 @@ export function ChatAnnotationFlattenDialog({
   return (
     <dialog
       open
-      // TODO(i18n): → `annotation.flatten.title` in Task 7.3.
-      aria-label="插入主会话"
+      aria-label={t("annotation.flatten.title")}
       className="rounded border border-border bg-background p-4 text-sm shadow-md"
     >
-      {/* TODO(i18n): → `annotation.flatten.title` */}
-      <h3 className="text-base font-medium">插入主会话</h3>
-      {/* TODO(i18n): → `annotation.flatten.description` */}
-      <p className="mt-2">
-        将把旁注里的 {messageCount} 条消息插入到主 conversation 末尾。
-      </p>
+      <h3 className="text-base font-medium">{t("annotation.flatten.title")}</h3>
+      <p className="mt-2">{t("annotation.flatten.description", { count: messageCount })}</p>
       <details className="mt-2">
-        {/* TODO(i18n): → `annotation.flatten.previewLabel` */}
-        <summary className="cursor-pointer">预览前 {PREVIEW_MAX_CHARS} 字</summary>
+        <summary className="cursor-pointer">
+          {t("annotation.flatten.previewLabel", { count: PREVIEW_MAX_CHARS })}
+        </summary>
         <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">
           {preview}
         </pre>
@@ -62,19 +55,17 @@ export function ChatAnnotationFlattenDialog({
       <div className="mt-3 flex gap-2">
         <button
           type="button"
-          // TODO(i18n): → `annotation.flatten.cancel`
           onClick={onClose}
           className="rounded border border-border bg-background px-3 py-1 text-xs"
         >
-          取消
+          {t("annotation.flatten.cancel")}
         </button>
         <button
           type="button"
-          // TODO(i18n): → `annotation.flatten.confirm`
           onClick={onConfirm}
           className="rounded border border-blue-500 bg-blue-500 px-3 py-1 text-xs text-white"
         >
-          确认插入
+          {t("annotation.flatten.confirm")}
         </button>
       </div>
     </dialog>

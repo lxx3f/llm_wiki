@@ -1027,5 +1027,64 @@
     "minutesAgo": "{{count}} 分钟前",
     "hoursAgo": "{{count}} 小时前",
     "daysAgo": "{{count}} 天前"
+  },
+  "annotation": {
+    "menu": {
+      "contextPrompt": "针对这段单独追问"
+    },
+    "status": {
+      "open": "追问中",
+      "resolved": "已解决",
+      "flattened": "已压平"
+    },
+    "action": {
+      "resolve": "✓ 明白了",
+      "flatten": "插入主会话",
+      "openInDrawer": "在抽屉中打开",
+      "openDrawer": "打开旁注抽屉"
+    },
+    "toggle": {
+      "expand": "展开",
+      "collapse": "收起"
+    },
+    "role": {
+      "user": "Q",
+      "assistant": "A"
+    },
+    "drawer": {
+      "title": "旁注 ({{count}})",
+      "close": "关闭抽屉",
+      "promptSelect": "选择左侧条目查看详情",
+      "toggleLabel": "查看全部旁注 ({{count}})"
+    },
+    "list": {
+      "empty": "还没有追问"
+    },
+    "flatten": {
+      "previewSummary": "预览摘要",
+      "title": "插入主会话",
+      "description": "将把旁注里的 {{count}} 条消息插入到主 conversation 末尾。",
+      "previewLabel": "预览前 {{count}} 字",
+      "cancel": "取消",
+      "confirm": "确认插入"
+    },
+    "saveToWiki": {
+      "title": "保存为 Wiki 页面",
+      "description": "将基于这条旁注生成一个新的 Wiki 页面。",
+      "titleLabel": "标题",
+      "path": "路径",
+      "includeSnippet": "附加 snippet 引用",
+      "includeThread": "附加完整 thread",
+      "cancel": "取消",
+      "confirm": "保存",
+      "savedBacklink": "📄 已保存"
+    },
+    "wiki": {
+      "saved": "📄 已保存"
+    },
+    "shortcut": {
+      "k": "Cmd/Ctrl+K",
+      "shiftA": "Cmd/Ctrl+Shift+A"
+    }
   }
 }

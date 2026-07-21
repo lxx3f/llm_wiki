@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react"
 import * as ContextMenu from "@radix-ui/react-context-menu"
+import { useTranslation } from "react-i18next"
 import { getSelectionWithin } from "./selection-utils"
 import { useAnnotationActions } from "./useAnnotationActions"
 import type { DisplayMessage } from "@/stores/chat-store"
@@ -29,6 +30,7 @@ interface MenuState {
  * ancestors with `overflow: hidden`.
  */
 export function ChatAnnotationTrigger({ message, children }: ChatAnnotationTriggerProps) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const [menuState, setMenuState] = useState<MenuState | null>(null)
   const { createAnnotation } = useAnnotationActions()
@@ -80,7 +82,7 @@ export function ChatAnnotationTrigger({ message, children }: ChatAnnotationTrigg
             onSelect={handleCreate}
             className="flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground"
           >
-            💬 针对这段单独追问
+            💬 {t("annotation.menu.contextPrompt")}
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>

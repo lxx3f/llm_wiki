@@ -10,20 +10,30 @@ use super::types::{AgentReference, AgentUserInputRequest, PendingWikiWrite};
 pub enum AgentEvent {
     AgentStart {
         session_id: String,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     TurnStart {
         mode: String,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     ToolStart {
         tool: String,
         input: Option<String>,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     ToolEnd {
         tool: String,
         output: Option<String>,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     ReferenceAdded {
         reference: AgentReference,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     FileChanged {
         path: String,
@@ -32,28 +42,44 @@ pub enum AgentEvent {
         existed_before: bool,
         #[serde(rename = "previousContent", skip_serializing_if = "Option::is_none")]
         previous_content: Option<String>,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     MessageDelta {
         text: String,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     Error {
         message: String,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     UserInputRequired {
         request: AgentUserInputRequest,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     SchemaProposalConfirmationRequired {
         proposal: SchemaProposal,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     MemoryProposalConfirmationRequired {
         proposal: MemoryProposal,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     WikiWriteConfirmationRequired {
         #[serde(rename = "pendingWrite")]
         pending_write: PendingWikiWrite,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
     Done {
         session_id: String,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
     },
 }
 
@@ -62,6 +88,7 @@ impl AgentEvent {
         Self::ToolStart {
             tool: tool.into(),
             input,
+            annotation_id: None,
         }
     }
 
@@ -69,6 +96,7 @@ impl AgentEvent {
         Self::ToolEnd {
             tool: tool.into(),
             output,
+            annotation_id: None,
         }
     }
 
@@ -94,6 +122,7 @@ mod tests {
         let value = serde_json::to_value(AgentEvent::ToolStart {
             tool: "wiki.search".to_string(),
             input: Some("query".to_string()),
+            annotation_id: None,
         })
         .unwrap();
 
@@ -109,6 +138,7 @@ mod tests {
             tool: "workspace.write_file".to_string(),
             existed_before: true,
             previous_content: Some("before".to_string()),
+            annotation_id: None,
         })
         .unwrap();
 
@@ -141,7 +171,11 @@ mod tests {
             created_at: 0,
             status: "pending".to_string(),
         };
-        let value = serde_json::to_value(AgentEvent::SchemaProposalConfirmationRequired { proposal }).unwrap();
+        let value = serde_json::to_value(AgentEvent::SchemaProposalConfirmationRequired {
+            proposal,
+            annotation_id: None,
+        })
+        .unwrap();
         assert_eq!(value["type"], "schemaProposalConfirmationRequired");
         assert_eq!(value["proposal"]["id"], "proposal-1");
     }
@@ -155,6 +189,7 @@ mod tests {
                 content: "after".to_string(),
                 existed_before: true,
             },
+            annotation_id: None,
         })
         .unwrap();
 
@@ -169,9 +204,35 @@ mod tests {
             tool: "workspace.write_file".to_string(),
             existed_before: true,
             previous_content: Some("private previous body".to_string()),
+            annotation_id: None,
         };
         event.redact_for_external_api();
         let value = serde_json::to_value(event).unwrap();
         assert!(value.get("previousContent").is_none());
+    }
+
+    #[test]
+    fn agent_event_skips_annotation_id_when_none() {
+        let value = serde_json::to_value(AgentEvent::MessageDelta {
+            text: "hello".to_string(),
+            annotation_id: None,
+        })
+        .unwrap();
+        assert!(
+            value.get("annotationId").is_none(),
+            "annotationId should be omitted when None"
+        );
+        assert_eq!(value["type"], "messageDelta");
+        assert_eq!(value["text"], "hello");
+    }
+
+    #[test]
+    fn agent_event_includes_annotation_id_when_some() {
+        let value = serde_json::to_value(AgentEvent::MessageDelta {
+            text: "hello".to_string(),
+            annotation_id: Some("ann_1".to_string()),
+        })
+        .unwrap();
+        assert_eq!(value["annotationId"], "ann_1");
     }
 }

@@ -294,7 +294,10 @@ impl AgentRuntime {
             && tools::wiki_page_exists(&self.project_path, path)?
         {
             let pending = self.pending_writes.insert(&self.project_id, session_id, path, content);
-            emit_event(events, event_sink, AgentEvent::WikiWriteConfirmationRequired { pending_write: pending.clone() });
+            emit_event(events, event_sink, AgentEvent::WikiWriteConfirmationRequired {
+                pending_write: pending.clone(),
+                annotation_id: None,
+            });
             return Ok(Some(pending));
         }
         Ok(None)
@@ -339,6 +342,7 @@ impl AgentRuntime {
             &event_sink,
             AgentEvent::AgentStart {
                 session_id: session_id.clone(),
+                annotation_id: None,
             },
         );
         emit_event(
@@ -346,6 +350,7 @@ impl AgentRuntime {
             &event_sink,
             AgentEvent::TurnStart {
                 mode: mode_label(request.mode).to_string(),
+                annotation_id: None,
             },
         );
         let mut references = Vec::new();
@@ -571,6 +576,7 @@ impl AgentRuntime {
                             tool: "wiki.write_page".to_string(),
                             existed_before: output.existed_before,
                             previous_content: output.previous_content,
+                            annotation_id: None,
                         },
                     );
                     let reference = output.reference;
@@ -579,6 +585,7 @@ impl AgentRuntime {
                         &event_sink,
                         AgentEvent::ReferenceAdded {
                             reference: reference.clone(),
+                            annotation_id: None,
                         },
                     );
                     references.push(reference);
@@ -827,6 +834,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::ReferenceAdded {
                                 reference: reference.clone(),
+                                annotation_id: None,
                             },
                         );
                     }
@@ -975,6 +983,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::ReferenceAdded {
                                 reference: reference.clone(),
+                                annotation_id: None,
                             },
                         );
                     }
@@ -1064,6 +1073,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::ReferenceAdded {
                                 reference: reference.clone(),
+                                annotation_id: None,
                             },
                         );
                     }
@@ -1154,6 +1164,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::ReferenceAdded {
                                 reference: reference.clone(),
+                                annotation_id: None,
                             },
                         );
                     }
@@ -1244,6 +1255,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::ReferenceAdded {
                                 reference: reference.clone(),
+                                annotation_id: None,
                             },
                         );
                     }
@@ -1386,6 +1398,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::MessageDelta {
                                 text: delta.to_string(),
+                                annotation_id: None,
                             },
                         );
                     },
@@ -1431,6 +1444,7 @@ impl AgentRuntime {
                         &event_sink,
                         AgentEvent::Error {
                             message: err.clone(),
+                            annotation_id: None,
                         },
                     );
                     return Err(err);
@@ -1444,6 +1458,7 @@ impl AgentRuntime {
             &event_sink,
             AgentEvent::Done {
                 session_id: session_id.clone(),
+                annotation_id: None,
             },
         );
         let usage = AgentUsage {
@@ -1738,6 +1753,7 @@ impl AgentRuntime {
                             &event_sink,
                             AgentEvent::Error {
                                 message: err.clone(),
+                                annotation_id: None,
                             },
                         );
                         return Err(err);
@@ -1753,6 +1769,7 @@ impl AgentRuntime {
                         &event_sink,
                         AgentEvent::MessageDelta {
                             text: answer.clone(),
+                            annotation_id: None,
                         },
                     );
                 }
@@ -1761,6 +1778,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::Done {
                         session_id: session_id.clone(),
+                        annotation_id: None,
                     },
                 );
                 let reference_count = references.len();
@@ -1833,6 +1851,7 @@ impl AgentRuntime {
                         &event_sink,
                         AgentEvent::MessageDelta {
                             text: answer.clone(),
+                            annotation_id: None,
                         },
                     );
                 }
@@ -1841,6 +1860,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::Done {
                         session_id: session_id.clone(),
+                        annotation_id: None,
                     },
                 );
                 let usage = AgentUsage {
@@ -1875,6 +1895,7 @@ impl AgentRuntime {
                         &event_sink,
                         AgentEvent::MessageDelta {
                             text: answer.clone(),
+                            annotation_id: None,
                         },
                     );
                 }
@@ -1883,6 +1904,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::Done {
                         session_id: session_id.clone(),
+                        annotation_id: None,
                     },
                 );
                 let usage = AgentUsage {
@@ -1932,6 +1954,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::UserInputRequired {
                         request: request_form.clone(),
+                        annotation_id: None,
                     },
                 );
                 emit_event(
@@ -1939,6 +1962,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::Done {
                         session_id: session_id.clone(),
+                        annotation_id: None,
                     },
                 );
                 let answer = request_form.description.clone().unwrap_or_else(|| {
@@ -2015,6 +2039,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::Done {
                         session_id: session_id.clone(),
+                        annotation_id: None,
                     },
                 );
                 let reference_count = references.len();
@@ -2046,6 +2071,7 @@ impl AgentRuntime {
                         &event_sink,
                         AgentEvent::MessageDelta {
                             text: answer.clone(),
+                            annotation_id: None,
                         },
                     );
                 }
@@ -2054,6 +2080,7 @@ impl AgentRuntime {
                     &event_sink,
                     AgentEvent::Done {
                         session_id: session_id.clone(),
+                        annotation_id: None,
                     },
                 );
                 let reference_count = references.len();
@@ -2104,6 +2131,7 @@ impl AgentRuntime {
                 &event_sink,
                 AgentEvent::MessageDelta {
                     text: answer.clone(),
+                    annotation_id: None,
                 },
             );
         }
@@ -2112,10 +2140,11 @@ impl AgentRuntime {
             &event_sink,
             AgentEvent::Done {
                 session_id: session_id.clone(),
+                annotation_id: None,
             },
         );
         let pending_wiki_write = events.iter().rev().find_map(|event| match event {
-            AgentEvent::WikiWriteConfirmationRequired { pending_write } => Some(pending_write.clone()),
+            AgentEvent::WikiWriteConfirmationRequired { pending_write, .. } => Some(pending_write.clone()),
             _ => None,
         });
         let reference_count = references.len();
@@ -2684,6 +2713,7 @@ impl AgentRuntime {
                     event_sink,
                     AgentEvent::SchemaProposalConfirmationRequired {
                         proposal: proposal.clone(),
+                        annotation_id: None,
                     },
                 );
                 Ok(format!(
@@ -2702,6 +2732,7 @@ impl AgentRuntime {
                     event_sink,
                     AgentEvent::MemoryProposalConfirmationRequired {
                         proposal: proposal.clone(),
+                        annotation_id: None,
                     },
                 );
                 Ok(format!(
@@ -2875,6 +2906,7 @@ impl AgentRuntime {
                         tool: "wiki.write_page".to_string(),
                         existed_before: output.existed_before,
                         previous_content: output.previous_content,
+                        annotation_id: None,
                     },
                 );
                 let reference = output.reference;
@@ -2900,6 +2932,7 @@ impl AgentRuntime {
                         tool: tool.to_string(),
                         existed_before: output.existed_before,
                         previous_content: output.previous_content,
+                        annotation_id: None,
                     },
                 );
                 let reference = AgentReference {
@@ -2983,6 +3016,7 @@ impl AgentRuntime {
                         tool: "wiki.edit_page".to_string(),
                         existed_before: true,
                         previous_content: output.previous_content.clone(),
+                        annotation_id: None,
                     },
                 );
                 let reference = output.reference.clone();
@@ -3016,6 +3050,7 @@ impl AgentRuntime {
                         tool: "workspace.edit_file".to_string(),
                         existed_before: output.existed_before,
                         previous_content: output.previous_content.clone(),
+                        annotation_id: None,
                     },
                 );
                 let reference = AgentReference {
@@ -4395,6 +4430,7 @@ fn push_unique_reference(
         event_sink,
         AgentEvent::ReferenceAdded {
             reference: reference.clone(),
+            annotation_id: None,
         },
     );
     references.push(reference);
@@ -4958,7 +4994,7 @@ fn validate_images(images: &[super::types::AgentImage]) -> Result<(), String> {
 
 fn first_pending_wiki_write(events: &[AgentEvent]) -> Option<PendingWikiWrite> {
     events.iter().find_map(|event| match event {
-        AgentEvent::WikiWriteConfirmationRequired { pending_write } => Some(pending_write.clone()),
+        AgentEvent::WikiWriteConfirmationRequired { pending_write, .. } => Some(pending_write.clone()),
         _ => None,
     })
 }
@@ -5294,6 +5330,7 @@ mod tests {
             tool: "wiki.write_page".to_string(),
             existed_before: output.existed_before,
             previous_content: output.previous_content,
+            annotation_id: None,
         });
 
         assert_eq!(fs::read_to_string(&page).unwrap(), "after");
@@ -5731,7 +5768,7 @@ mod tests {
         assert!(response
             .events
             .iter()
-            .any(|event| matches!(event, AgentEvent::TurnStart { mode } if mode == "local_first")));
+            .any(|event| matches!(event, AgentEvent::TurnStart { mode, .. } if mode == "local_first")));
     }
 
     #[tokio::test]
@@ -6924,7 +6961,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
-            AgentEvent::FileChanged { path, tool, existed_before: false, previous_content: None }
+            AgentEvent::FileChanged { path, tool, existed_before: false, previous_content: None, annotation_id: None }
                 if path == "agent-workspace/deck/index.html" && tool == "workspace.write_file"
         ));
     }

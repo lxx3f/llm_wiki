@@ -86,6 +86,11 @@ export interface ChatAgentEvent {
    * summary; for search tools it is the count/stats line.
    */
   output?: string
+  /**
+   * 当事件属于某个 annotation 的 follow-up 流时携带；UI 据此路由到对应 annotation。
+   * 主 conversation turn 的事件此字段为 undefined。
+   */
+  annotationId?: string
 }
 
 export type ChatAgentMode = "fast" | "standard" | "deep" | "local_first"

@@ -16,6 +16,7 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
+import { useWikiStore } from "@/stores/wiki-store"
 import { useAnnotationActions } from "./useAnnotationActions"
 import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
 import { SaveAnnotationToWikiDialog, type SaveAnnotationResult } from "./SaveAnnotationToWikiDialog"
@@ -99,14 +100,17 @@ export function ChatAnnotationInline({ annotation, onSaveAnnotation }: ChatAnnot
             </div>
           ))}
           {annotation.wikiPath && (
-            <a
-              href={`llm-wiki://${annotation.wikiPath}`}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() => {
+                const { setActiveView, setSelectedFile } = useWikiStore.getState()
+                setActiveView("wiki")
+                setSelectedFile(annotation.wikiPath ?? null)
+              }}
               className="text-xs text-blue-600 hover:underline"
             >
               {t("annotation.wiki.saved")}
-            </a>
+            </button>
           )}
           <div className="mt-1 flex gap-2">
             <button

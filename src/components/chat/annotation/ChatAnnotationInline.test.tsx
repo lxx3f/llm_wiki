@@ -6,6 +6,8 @@ import { ChatAnnotationInline } from "./ChatAnnotationInline"
 
 const mockResolve = vi.fn()
 const mockFlatten = vi.fn()
+const mockSetActiveView = vi.fn()
+const mockSetSelectedFile = vi.fn()
 
 vi.mock("./useAnnotationActions", () => ({
   useAnnotationActions: () => ({
@@ -14,6 +16,15 @@ vi.mock("./useAnnotationActions", () => ({
     resolveAnnotation: mockResolve,
     flattenAnnotation: mockFlatten,
   }),
+}))
+
+vi.mock("@/stores/wiki-store", () => ({
+  useWikiStore: {
+    getState: () => ({
+      setActiveView: mockSetActiveView,
+      setSelectedFile: mockSetSelectedFile,
+    }),
+  },
 }))
 
 const annotation = {
@@ -87,9 +98,14 @@ describe("ChatAnnotationInline", () => {
     )
 
     fireEvent.click(getByText(/展开/).closest("button")!)
-    const chip = getByText("📄 已保存").closest("a")
+    const chip = getByText("📄 已保存").closest("button")
     expect(chip).toBeTruthy()
-    expect(chip?.getAttribute("href")).toBe("llm-wiki://wiki/notes/x.md")
+    // Clicking the chip must switch to the wiki view and open the
+    // saved page in the preview pane (in-app navigation, no longer
+    // an `llm-wiki://` protocol link).
+    fireEvent.click(chip!)
+    expect(mockSetActiveView).toHaveBeenCalledWith("wiki")
+    expect(mockSetSelectedFile).toHaveBeenCalledWith("wiki/notes/x.md")
 
     rerender(<ChatAnnotationInline annotation={annotation} />)
     expect(queryByText("📄 已保存")).toBeNull()

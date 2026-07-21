@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { cleanup, render, fireEvent } from "@testing-library/react"
 import i18n from "@/i18n"
 import { ChatAnnotationDrawer } from "./ChatAnnotationDrawer"
@@ -52,6 +52,14 @@ describe("ChatAnnotationDrawer", () => {
   // "展开").
   beforeAll(async () => {
     await i18n.changeLanguage("zh")
+  })
+
+  // Defensive cleanup: restore the default English language so the
+  // singleton i18next instance doesn't leak the zh switch into
+  // other test files when vitest is configured with shared module
+  // cache (e.g. `pool: "forks"` with cache).
+  afterAll(async () => {
+    await i18n.changeLanguage("en")
   })
 
   // Explicit `cleanup` between tests — the project has no global

@@ -331,6 +331,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      name: "llm_wiki_chat_annotation_list",
+      description: "List all chat annotations for a conversation. Read-only. Currently a stub: the Rust API does not yet expose annotation endpoints, so this returns an error until Task 7.1 backend wiring lands.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+          conversation_id: { type: "string", description: "Conversation / chat session id to list annotations for." },
+        },
+        required: ["conversation_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "llm_wiki_chat_annotation_read",
+      description: "Read a single chat annotation's full thread. Read-only. Currently a stub: the Rust API does not yet expose annotation endpoints, so this returns an error until Task 7.1 backend wiring lands.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Project UUID, project path, or 'current'. Defaults to current." },
+          annotation_id: { type: "string", description: "Annotation id returned by llm_wiki_chat_annotation_list." },
+        },
+        required: ["annotation_id"],
+        additionalProperties: false,
+      },
+    },
   ],
 }))
 
@@ -508,6 +534,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await client.memoryImportDiscard(projectId(args), stringArg(args.batch_id, "batch_id"))
         return textResult("Memory import batch discarded.")
       }
+      case "llm_wiki_chat_annotation_list": {
+        await assertMcpEnabled()
+        const conversationId = stringArg(args.conversation_id, "conversation_id")
+        try {
+          const items = await client.listAnnotations(conversationId)
+          return textResult(JSON.stringify(items, null, 2))
+        } catch (err) {
+          return annotationStubError("listAnnotations", err)
+        }
+      }
+      case "llm_wiki_chat_annotation_read": {
+        await assertMcpEnabled()
+        const annotationId = stringArg(args.annotation_id, "annotation_id")
+        try {
+          const item = await client.readAnnotation(annotationId)
+          return textResult(JSON.stringify(item, null, 2))
+        } catch (err) {
+          return annotationStubError("readAnnotation", err)
+        }
+      }
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`)
     }
@@ -533,6 +579,35 @@ async function assertMcpEnabled(): Promise<void> {
 function textResult(text: string) {
   return {
     content: [{ type: "text" as const, text }],
+  }
+}
+
+/**
+ * Build a structured error response for chat annotation tool stubs. The MCP
+ * caller sees a JSON payload with `error`, the failing `tool`, the captured
+ * message and a follow-up hint instead of a generic InternalError, so future
+ * implementers can find the rationale (Task 7.1 Path 1).
+ */
+function annotationStubError(tool: "listAnnotations" | "readAnnotation", err: unknown) {
+  const message = err instanceof Error ? err.message : String(err)
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          {
+            error: "annotation_endpoint_not_implemented",
+            tool,
+            message,
+            followup:
+              "Annotation endpoints are not yet exposed by the Rust API. See Task 7.1 follow-up to wire the backend.",
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    isError: true,
   }
 }
 

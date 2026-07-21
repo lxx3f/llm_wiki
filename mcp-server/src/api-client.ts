@@ -209,6 +209,28 @@ export interface ApiFilesResponse {
   truncated?: boolean
 }
 
+/**
+ * Read-only view of a chat annotation. Mirrors the React store shape
+ * (see `src/lib/chat-agent-types.ts#ChatAnnotation`); fields are optional on
+ * purpose so this client stays compatible with stub responses while the
+ * backend is still being designed. MCP tools that return these objects
+ * must treat every field as best-effort metadata.
+ */
+export interface ApiAnnotation {
+  id: string
+  parentMessageId: string
+  snippet: string
+  range?: { start: number; end: number }
+  status?: string
+  createdAt?: number
+  thread?: Array<Record<string, unknown>>
+  contextHint?: string
+  flattenedMessageIds?: string[]
+  wikiPath?: string
+  projectId?: string
+  conversationId?: string
+}
+
 export interface ApiHealth {
   ok?: boolean
   status?: string
@@ -481,6 +503,35 @@ export class LlmWikiApiClient {
     return this.request(`/projects/${encodeURIComponent(projectId)}/sources/rescan`, {
       method: "POST",
     })
+  }
+
+  /**
+   * Stub: list all chat annotations for a conversation. The Rust API does not
+   * yet expose a dedicated annotation endpoint (see Task 7.1 Path 1); the
+   * persisted annotations live in the chat history JSON files and are not
+   * reachable via `src-tauri/src/api_server.rs` as of the current phase.
+   * Throws so missing wiring is loud instead of silently returning `[]`.
+   */
+  async listAnnotations(conversationId: string): Promise<ApiAnnotation[]> {
+    if (!conversationId || typeof conversationId !== "string") {
+      throw new Error("listAnnotations: conversationId is required")
+    }
+    throw new Error(
+      "listAnnotations: backend endpoint not yet exposed (Task 7.1 Path 1 stub)",
+    )
+  }
+
+  /**
+   * Stub: read a single annotation's full thread by id. Same rationale as
+   * `listAnnotations` — the Rust API does not yet expose annotation reads.
+   */
+  async readAnnotation(annotationId: string): Promise<ApiAnnotation> {
+    if (!annotationId || typeof annotationId !== "string") {
+      throw new Error("readAnnotation: annotationId is required")
+    }
+    throw new Error(
+      "readAnnotation: backend endpoint not yet exposed (Task 7.1 Path 1 stub)",
+    )
   }
 
   private async request(path: string, options: { method?: "DELETE" | "GET" | "POST"; body?: unknown; auth?: boolean } = {}): Promise<Record<string, unknown>> {

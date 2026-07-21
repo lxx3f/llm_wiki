@@ -231,3 +231,47 @@ test("API errors include status and server message", async () => {
   const client = new LlmWikiApiClient({ fetchImpl })
   await assert.rejects(() => client.projects(), /LLM Wiki API 401: Unauthorized/)
 })
+
+test("listAnnotations is a stub that throws without calling the API", async () => {
+  const calls: string[] = []
+  const fetchImpl = async (url: string | URL | Request): Promise<Response> => {
+    calls.push(String(url))
+    return new Response(JSON.stringify({ ok: true, annotations: [] }), { status: 200 })
+  }
+
+  const client = new LlmWikiApiClient({ fetchImpl })
+  await assert.rejects(
+    () => client.listAnnotations("conv-1"),
+    /listAnnotations: backend endpoint not yet exposed \(Task 7\.1 Path 1 stub\)/,
+  )
+  assert.equal(calls.length, 0, "listAnnotations stub must not hit the API")
+})
+
+test("readAnnotation is a stub that throws without calling the API", async () => {
+  const calls: string[] = []
+  const fetchImpl = async (url: string | URL | Request): Promise<Response> => {
+    calls.push(String(url))
+    return new Response(JSON.stringify({ ok: true, annotation: {} }), { status: 200 })
+  }
+
+  const client = new LlmWikiApiClient({ fetchImpl })
+  await assert.rejects(
+    () => client.readAnnotation("ann-1"),
+    /readAnnotation: backend endpoint not yet exposed \(Task 7\.1 Path 1 stub\)/,
+  )
+  assert.equal(calls.length, 0, "readAnnotation stub must not hit the API")
+})
+
+test("listAnnotations rejects empty conversationId loudly", async () => {
+  const client = new LlmWikiApiClient({
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  })
+  await assert.rejects(() => client.listAnnotations(""), /conversationId is required/)
+})
+
+test("readAnnotation rejects empty annotationId loudly", async () => {
+  const client = new LlmWikiApiClient({
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  })
+  await assert.rejects(() => client.readAnnotation(""), /annotationId is required/)
+})

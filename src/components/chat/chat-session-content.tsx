@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from "react"
+import { Fragment, useRef, useEffect, useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
@@ -1936,9 +1936,8 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                     const isLastAssistant = msg.role === "assistant" &&
                       !activeMessages.slice(idx + 1).some((m) => m.role === "assistant")
                     return (
-                      <>
+                      <Fragment key={`${msg.conversationId}:${msg.id}:${msg.timestamp}:${idx}`}>
                       <ChatMessage
-                        key={`${msg.conversationId}:${msg.id}:${msg.timestamp}:${idx}`}
                         message={msg}
                         isLastAssistant={isLastAssistant && !activeStreaming}
                         onRegenerate={isLastAssistant ? handleRegenerate : undefined}
@@ -1973,7 +1972,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                           onReject={() => void handleRejectMemoryProposal(msg.id, msg.pendingMemoryProposal!)}
                         />
                       )}
-                      </>
+                      </Fragment>
                     )
                   })}
                   {activeStreaming && <StreamingMessage content={streamingContent} agentEvents={activeAgentEvents} />}

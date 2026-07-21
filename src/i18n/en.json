@@ -1040,6 +1040,7 @@
     "action": {
       "resolve": "✓ Got it",
       "flatten": "Insert into main conversation",
+      "saveToWiki": "Save as Wiki",
       "openInDrawer": "Open in drawer",
       "openDrawer": "Open annotation drawer"
     },

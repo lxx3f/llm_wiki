@@ -39,6 +39,7 @@ export function ChatAnnotationFlattenDialog({
   return (
     <dialog
       open
+      data-testid="flatten-annotation-dialog"
       aria-label={t("annotation.flatten.title")}
       className="rounded border border-border bg-background p-4 text-sm shadow-md"
     >

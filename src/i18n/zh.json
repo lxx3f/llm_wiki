@@ -1040,6 +1040,7 @@
     "action": {
       "resolve": "✓ 明白了",
       "flatten": "插入主会话",
+      "saveToWiki": "保存为 Wiki",
       "openInDrawer": "在抽屉中打开",
       "openDrawer": "打开旁注抽屉"
     },

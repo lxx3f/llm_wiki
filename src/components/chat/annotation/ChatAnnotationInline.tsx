@@ -20,6 +20,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useAnnotationActions } from "./useAnnotationActions"
 import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
 import { SaveAnnotationToWikiDialog, type SaveAnnotationResult } from "./SaveAnnotationToWikiDialog"
+import { MarkdownContent } from "../MarkdownContent"
 
 interface ChatAnnotationInlineProps {
   annotation: ChatAnnotation
@@ -96,7 +97,7 @@ export function ChatAnnotationInline({ annotation, onSaveAnnotation }: ChatAnnot
                   : t("annotation.role.assistant")}
                 :
               </strong>{" "}
-              {message.content}
+              <MarkdownContent content={message.content} />
             </div>
           ))}
           {annotation.wikiPath && (
@@ -125,6 +126,7 @@ export function ChatAnnotationInline({ annotation, onSaveAnnotation }: ChatAnnot
               type="button"
               onClick={() => setShowFlattenDialog(true)}
               disabled={annotation.status === "flattened"}
+              data-testid="flatten-annotation-trigger"
               className="rounded border border-border bg-background px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t("annotation.action.flatten")}

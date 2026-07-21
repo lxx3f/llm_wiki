@@ -25,8 +25,10 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-types"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { summarizeAgentFileChange } from "@/lib/agent-file-activity"
-import { useAutoResolveAnnotations } from "./annotation/useAnnotationActions"
+import { useAnnotationActions, useAutoResolveAnnotations } from "./annotation/useAnnotationActions"
+import { useAnnotationShortcuts } from "./annotation/useAnnotationShortcuts"
 import { ChatAnnotationDrawer } from "./annotation/ChatAnnotationDrawer"
+import { getSelectionWithin } from "./annotation/selection-utils"
 
 type InternalChatSendOptions = ChatSendOptions & {
   suppressUserMessage?: boolean
@@ -394,6 +396,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   // empty-deps effect that is cleared on unmount, so it has zero render cost.
   useAutoResolveAnnotations()
   useSourceFiles() // Keep source file cache warm
+  const { createAnnotation } = useAnnotationActions()
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const streamingContent = useChatStore((s) => s.streamingContent)
@@ -481,6 +484,64 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   // Research pane to avoid two right-pane surfaces appearing side-by-side.
   const openDrawerFor = useChatStore((s) => s.annotationDrawerOpen)
   const setOpenDrawerFor = useChatStore((s) => s.setAnnotationDrawerOpen)
+  // Wire the annotation keyboard shortcuts (Cmd/Ctrl+K creates an
+  // annotation from the current selection; Cmd/Ctrl+Shift+A toggles
+  // the annotation drawer). The hook only fans out keyboard intent;
+  // the actual side effects live in the callbacks below so the hook
+  // stays trivially testable.
+  useAnnotationShortcuts({
+    onCreate: () => {
+      // Cmd+K: capture the current window selection, find the parent
+      // assistant message via the closest `[data-message-id]` ancestor
+      // (set by AssistantParagraphs in chat-message.tsx), and create
+      // an annotation bound to it. Mirrors the right-click trigger
+      // path (ChatAnnotationTrigger) but driven by the keyboard.
+      const sel = typeof window !== "undefined" ? window.getSelection() : null
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
+      const startContainer = sel.getRangeAt(0).startContainer
+      const startElement =
+        startContainer.nodeType === Node.ELEMENT_NODE
+          ? (startContainer as Element)
+          : startContainer.parentElement
+      const parentEl = startElement?.closest("[data-message-id]")
+      if (!parentEl) return
+      const parentMessageId = parentEl.getAttribute("data-message-id")
+      if (!parentMessageId) return
+      const within = getSelectionWithin(parentEl as HTMLElement)
+      if (!within) return
+      createAnnotation({
+        parentMessageId,
+        snippet: within.snippet,
+        range: within.range,
+      })
+    },
+    onToggleDrawer: () => {
+      // Cmd+Shift+A: flip the drawer open/close. If currently open,
+      // close it. Otherwise, scan all messages across conversations
+      // for the most-recently-created annotation and open the drawer
+      // scoped to its parent message — that's the most useful
+      // default since the user just pressed the shortcut and likely
+      // wants to revisit their latest follow-up thread. If no
+      // annotations exist anywhere, this is a no-op (drawer stays
+      // closed rather than opening empty).
+      const state = useChatStore.getState()
+      if (state.annotationDrawerOpen) {
+        setOpenDrawerFor(null)
+        return
+      }
+      let latest: { parentMessageId: string; createdAt: number } | null = null
+      for (const message of state.messages) {
+        for (const annotation of message.annotations ?? []) {
+          if (!latest || annotation.createdAt > latest.createdAt) {
+            latest = { parentMessageId: annotation.parentMessageId, createdAt: annotation.createdAt }
+          }
+        }
+      }
+      if (latest) {
+        setOpenDrawerFor(latest.parentMessageId)
+      }
+    },
+  })
   // Clear the drawer on unmount so a freshly mounted ChatSessionContent
   // instance (e.g. user switches from ChatPanel to WikiPageAssistant)
   // does not pick up a stale drawer id left behind by the previous

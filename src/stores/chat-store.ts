@@ -66,6 +66,7 @@ interface ChatState {
   activeConversationId: string | null
   messages: DisplayMessage[]
   isStreaming: boolean
+  streamingTargets: { main: boolean; annotations: Set<string> }
   streamingContent: string
   mode: "chat" | "ingest"
   ingestSource: string | null
@@ -90,6 +91,10 @@ interface ChatState {
   setMessages: (messages: DisplayMessage[]) => void
   setConversations: (conversations: Conversation[]) => void
   setStreaming: (streaming: boolean) => void
+  startMainStream: () => void
+  endMainStream: () => void
+  startAnnotationStream: (annotationId: string) => void
+  endAnnotationStream: (annotationId: string) => void
   appendStreamToken: (token: string) => void
   finalizeStream: (content: string, references?: MessageReference[], agentSteps?: ChatAgentStep[], userInputRequest?: ChatUserInputRequest, agentFileChanges?: ChatAgentFileChange[]) => void
   finalizeStreamForConversation: (conversationId: string, content: string, references?: MessageReference[], agentSteps?: ChatAgentStep[], userInputRequest?: ChatUserInputRequest, agentFileChanges?: ChatAgentFileChange[]) => void
@@ -134,6 +139,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeConversationId: null,
   messages: [],
   isStreaming: false,
+  streamingTargets: { main: false, annotations: new Set() },
   streamingContent: "",
   mode: "chat",
   ingestSource: null,
@@ -268,6 +274,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // conversation until the next token arrives.
     ...(isStreaming ? { streamingContent: "" } : state.streamingContent ? {} : {}),
   })),
+
+  startMainStream: () =>
+    set((state) => ({
+      streamingTargets: { ...state.streamingTargets, main: true },
+    })),
+
+  endMainStream: () =>
+    set((state) => ({
+      streamingTargets: { ...state.streamingTargets, main: false },
+    })),
+
+  startAnnotationStream: (annotationId) =>
+    set((state) => ({
+      streamingTargets: {
+        ...state.streamingTargets,
+        annotations: new Set([...state.streamingTargets.annotations, annotationId]),
+      },
+    })),
+
+  endAnnotationStream: (annotationId) =>
+    set((state) => {
+      const next = new Set(state.streamingTargets.annotations)
+      next.delete(annotationId)
+      return { streamingTargets: { ...state.streamingTargets, annotations: next } }
+    }),
 
   appendStreamToken: (token) =>
     set((state) => ({

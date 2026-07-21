@@ -333,3 +333,19 @@ describe("annotation CRUD", () => {
     expect(useChatStore.getState().messages.length).toBe(totalBefore)
   })
 })
+
+describe("streamingTargets", () => {
+  it("tracks parallel main + annotation streams", () => {
+    const s = useChatStore.getState()
+    s.startMainStream()
+    s.startAnnotationStream("ann_1")
+    s.startAnnotationStream("ann_2")
+    const t = useChatStore.getState().streamingTargets
+    expect(t.main).toBe(true)
+    expect([...t.annotations]).toEqual(["ann_1", "ann_2"])
+    s.endAnnotationStream("ann_1")
+    expect([...useChatStore.getState().streamingTargets.annotations]).toEqual(["ann_2"])
+    s.endMainStream()
+    expect(useChatStore.getState().streamingTargets.main).toBe(false)
+  })
+})

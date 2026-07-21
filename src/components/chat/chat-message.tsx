@@ -84,6 +84,7 @@ interface ChatMessageProps {
   onOpenReferencePreview?: (preview: ChatReferencePreview, relatedPreviews?: ChatReferencePreview[]) => void
   onResolveShellCommand?: (command: string, decision: ChatShellCommandApproval["decision"], instructions?: string) => void
   onSubmitUserInput?: (request: ChatUserInputRequest, answers: Record<string, unknown>) => boolean
+  onOpenAnnotationDrawer?: () => void
 }
 
 export interface ChatReferencePreview {
@@ -102,6 +103,7 @@ function ChatMessageImpl({
   onOpenReferencePreview,
   onResolveShellCommand,
   onSubmitUserInput,
+  onOpenAnnotationDrawer,
 }: ChatMessageProps) {
   const isUser = message.role === "user"
   const isSystem = message.role === "system"
@@ -184,6 +186,18 @@ function ChatMessageImpl({
           message.annotations?.map((annotation) => (
             <ChatAnnotationInline key={annotation.id} annotation={annotation} />
           ))}
+        {isAssistant && onOpenAnnotationDrawer && (message.annotations?.length ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={onOpenAnnotationDrawer}
+            className="self-start inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+            // TODO(i18n): → `annotation.action.openDrawer` in Task 7.3.
+            title="Open annotation drawer"
+          >
+            {/* TODO(i18n): → `annotation.drawer.toggleLabel` in Task 7.3. */}
+            查看全部旁注 ({message.annotations?.length ?? 0})
+          </button>
+        )}
         {isAssistant && (
           <CitedReferencesPanel
             content={message.content}
@@ -427,6 +441,7 @@ export const ChatMessage = memo(ChatMessageImpl, (prev, next) =>
   && prev.onOpenReferencePreview === next.onOpenReferencePreview
   && prev.onResolveShellCommand === next.onResolveShellCommand
   && prev.onSubmitUserInput === next.onSubmitUserInput
+  && prev.onOpenAnnotationDrawer === next.onOpenAnnotationDrawer
 )
 
 function UserInputRequestPanel({

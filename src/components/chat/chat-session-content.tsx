@@ -26,6 +26,7 @@ import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-ty
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { summarizeAgentFileChange } from "@/lib/agent-file-activity"
 import { useAutoResolveAnnotations } from "./annotation/useAnnotationActions"
+import { ChatAnnotationDrawer } from "./annotation/ChatAnnotationDrawer"
 
 type InternalChatSendOptions = ChatSendOptions & {
   suppressUserMessage?: boolean
@@ -422,6 +423,14 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   const [referencePreviewWidth, setReferencePreviewWidth] = useState(420)
   const [availableSkills, setAvailableSkills] = useState<AvailableAgentSkill[]>([])
   const [approvingShellMessageId, setApprovingShellMessageId] = useState<string | null>(null)
+  // Right-pane annotation drawer. Holds the id of the assistant
+  // message whose annotations should be listed inline. Mutually
+  // exclusive with `referencePreview` and `generatedOutputPreviews`
+  // so the right column never fragments (per the project CLAUDE.md
+  // "right column mutex" guideline). The higher-level WikiPageAssistant
+  // / Research drawer is owned by AppLayout and stays scoped outside
+  // this component.
+  const [openDrawerFor, setOpenDrawerFor] = useState<string | null>(null)
   const buildGeneratedOutputPreview = useCallback(async (ref: MessageReference): Promise<ChatReferencePreview | null> => {
     if (!project) return null
     const outputPath = projectAbsolutePath(project.path, ref.path)
@@ -488,6 +497,22 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     lastMessage?.content.length ?? 0,
     activeStreaming ? streamingContent.length : 0,
   ].join(":")
+
+  // Resolve the message whose annotations should populate the
+  // drawer. Falls back to `null` when the id is stale (e.g. user
+  // picked from another message after the originating turn was
+  // pruned) so the drawer can no-op instead of crashing.
+  const drawerMessage = openDrawerFor
+    ? activeMessages.find((message) => message.id === openDrawerFor) ?? null
+    : null
+  // Clear stale drawer ids (originating message was pruned /
+  // switched conversations). Effect-driven so we never call
+  // `setState` during another component's render path.
+  useEffect(() => {
+    if (openDrawerFor && !drawerMessage) {
+      setOpenDrawerFor(null)
+    }
+  }, [openDrawerFor, drawerMessage])
 
   // Auto-scroll to bottom when messages change or streaming content updates
   useEffect(() => {
@@ -1693,6 +1718,11 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                             : undefined
                         }
                         onSubmitUserInput={isLastAssistant ? handleSubmitUserInput : undefined}
+                        onOpenAnnotationDrawer={
+                          msg.role === "assistant" && (msg.annotations?.length ?? 0) > 0
+                            ? () => setOpenDrawerFor(msg.id)
+                            : undefined
+                        }
                       />
                       {msg.pendingWikiWrite && <WikiWriteConfirmationCard pendingWrite={msg.pendingWikiWrite} onConfirm={() => void handleConfirmPendingWikiWrite(msg.id, msg.pendingWikiWrite!)} onCancel={() => handleCancelPendingWikiWrite(msg.id)} />}
                       {msg.pendingSchemaProposal && (
@@ -1763,7 +1793,15 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
         />
       </div>
 
-      {referencePreview && (
+      {openDrawerFor && drawerMessage && (
+        <ChatAnnotationDrawer
+          message={drawerMessage}
+          open
+          width={Math.max(referencePreviewWidth, 320)}
+          onClose={() => setOpenDrawerFor(null)}
+        />
+      )}
+      {!openDrawerFor && referencePreview && (
         <ChatReferencePreviewPanel
           preview={referencePreview}
           width={referencePreviewWidth}
@@ -1771,7 +1809,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           onClose={() => setReferencePreview(null)}
         />
       )}
-      {generatedOutputPreviews.length > 0 && (
+      {!openDrawerFor && generatedOutputPreviews.length > 0 && (
         <GeneratedOutputsPanel
           outputs={generatedOutputPreviews}
           onOpen={openGeneratedOutputModal}

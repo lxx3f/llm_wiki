@@ -349,3 +349,36 @@ describe("streamingTargets", () => {
     expect(useChatStore.getState().streamingTargets.main).toBe(false)
   })
 })
+
+describe("annotationDrawerOpen (chat-store ↔ AppLayout mutex)", () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      messages: [],
+      isStreaming: false,
+      streamingContent: "",
+      mode: "chat",
+      ingestSource: null,
+      useWebSearch: false,
+      useAnyTxtSearch: false,
+      agentMode: "standard",
+      retrievalMode: "standard",
+      selectedSkills: [],
+      selectedContextFiles: [],
+      disabledSkills: [],
+      annotationDrawerOpen: null,
+    })
+  })
+
+  it("defaults to null so AppLayout sees a closed drawer", () => {
+    expect(useChatStore.getState().annotationDrawerOpen).toBeNull()
+  })
+
+  it("round-trips a message id via setAnnotationDrawerOpen", () => {
+    useChatStore.getState().setAnnotationDrawerOpen("msg_abc")
+    expect(useChatStore.getState().annotationDrawerOpen).toBe("msg_abc")
+    useChatStore.getState().setAnnotationDrawerOpen(null)
+    expect(useChatStore.getState().annotationDrawerOpen).toBeNull()
+  })
+})

@@ -78,6 +78,21 @@ interface ChatState {
   selectedSkills: string[]
   selectedContextFiles: string[]
   disabledSkills: string[]
+  /**
+   * Right-pane annotation drawer target. Holds the id of the
+   * assistant message whose annotations the user is currently
+   * inspecting, or `null` when the drawer is closed.
+   *
+   * Lives in the store (rather than as local component state in
+   * `ChatSessionContent`) so `AppLayout` can subscribe and enforce
+   * the right-pane mutex required by the project CLAUDE.md: when
+   * the drawer is open in chat-view, the outer Research pane must
+   * close so the two right-pane surfaces never appear side-by-side.
+   * ChatSessionContent also writes to this field on unmount so a
+   * freshly mounted instance (e.g. switching from ChatPanel to
+   * WikiPageAssistant) does not pick up a stale drawer.
+   */
+  annotationDrawerOpen: string | null
 
   // Conversation management
   createConversation: () => string
@@ -118,6 +133,7 @@ interface ChatState {
   appendAnnotationMessage: (annotationId: string, role: "user" | "assistant", content: string) => void
   resolveAnnotation: (annotationId: string) => void
   flattenAnnotation: (annotationId: string) => string[]
+  setAnnotationDrawerOpen: (messageId: string | null) => void
 
   // Helpers
   getActiveMessages: () => DisplayMessage[]
@@ -151,6 +167,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectedSkills: [],
   selectedContextFiles: [],
   disabledSkills: [],
+  annotationDrawerOpen: null,
 
   createConversation: () => {
     const id = generateConversationId()
@@ -520,6 +537,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }),
     })
   },
+
+  setAnnotationDrawerOpen: (messageId) => set({ annotationDrawerOpen: messageId }),
 
   flattenAnnotation: (annotationId) => {
     const messages = get().messages

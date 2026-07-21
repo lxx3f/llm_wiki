@@ -14,7 +14,7 @@ import { WikiPageAssistant } from "@/components/chat/wiki-page-assistant"
 import { useResearchStore } from "@/stores/research-store"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { getAppLayoutVisibility } from "./app-layout-visibility"
-import { reconcileRightPanel, type RightPanel } from "./app-layout-right-panel"
+import { reconcileRightPanel, applyAnnotationDrawerMutex, type RightPanel } from "./app-layout-right-panel"
 
 interface AppLayoutProps {
   onSwitchProject: () => void
@@ -28,6 +28,17 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const researchPanelOpen = useResearchStore((s) => s.panelOpen)
   const researchPanelOpenVersion = useResearchStore((s) => s.panelOpenVersion)
   const setResearchPanelOpen = useResearchStore((s) => s.setPanelOpen)
+  // Right-pane mutex with the annotation drawer that lives inside
+  // ChatSessionContent (see `chat-session-content.tsx`). When the
+  // drawer is open in chat-view, the outer Research pane must close
+  // so the two right-pane surfaces never appear side-by-side.
+  // The mutex rule lives in `applyAnnotationDrawerMutex` and is
+  // scoped to chat-view — WikiPageAssistant (which contains its own
+  // ChatSessionContent + drawer) keeps owning the right pane in
+  // wiki-view because closing the right pane would unmount the drawer
+  // along with the chat session it depends on.
+  const annotationDrawerOpen = useChatStore((s) => s.annotationDrawerOpen)
+  const drawerBlocksResearchPane = annotationDrawerOpen !== null && activeView === "chat"
   const [rightPanelState, setRightPanelState] = useState(() => ({
     rightPanel: researchPanelOpen ? "research" as RightPanel : "none" as RightPanel,
     ignoredResearchOpenVersion: null as number | null,
@@ -40,13 +51,40 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    setRightPanelState((current) => reconcileRightPanel(
-      current,
-      researchPanelOpen,
-      researchPanelOpenVersion,
-      isStreaming,
-    ))
-  }, [researchPanelOpen, researchPanelOpenVersion, isStreaming])
+    setRightPanelState((current) => {
+      const reconciled = reconcileRightPanel(
+        current,
+        researchPanelOpen,
+        researchPanelOpenVersion,
+        isStreaming,
+      )
+      // Annotation drawer mutex: when the chat-view drawer is open
+      // we force the outer Research pane closed so the two right-pane
+      // surfaces never appear side-by-side. The override is scoped
+      // (chat-view only, never demotes `assistant`) so WikiPageAssistant
+      // keeps owning its own drawer when the user is in wiki-view.
+      // See `applyAnnotationDrawerMutex` for the full rule.
+      return applyAnnotationDrawerMutex(
+        reconciled,
+        annotationDrawerOpen,
+        activeView,
+      )
+    })
+  }, [researchPanelOpen, researchPanelOpenVersion, isStreaming, annotationDrawerOpen, activeView])
+
+  // The reconcile effect above hides the right pane, but if
+  // `researchPanelOpen` is still `true` in the research store the
+  // next reconcileRightPanel cycle (e.g. when `isStreaming` flips,
+  // or when the user closes the drawer) would immediately re-open
+  // Research. Mirror the visual close in the store so the user's
+  // Research-open intent is honored exactly once: when they close
+  // the drawer, the next reconcile cycle restores Research because
+  // `panelOpen` was never set back to true during the drawer window.
+  useEffect(() => {
+    if (drawerBlocksResearchPane && researchPanelOpen) {
+      setResearchPanelOpen(false)
+    }
+  }, [drawerBlocksResearchPane, researchPanelOpen, setResearchPanelOpen])
 
   const loadFileTree = useCallback(async () => {
     if (!project) return

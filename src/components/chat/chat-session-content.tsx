@@ -430,7 +430,23 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   // "right column mutex" guideline). The higher-level WikiPageAssistant
   // / Research drawer is owned by AppLayout and stays scoped outside
   // this component.
-  const [openDrawerFor, setOpenDrawerFor] = useState<string | null>(null)
+  //
+  // The id lives in the chat-store (rather than component-local state)
+  // so AppLayout can subscribe and enforce the outer right-pane mutex:
+  // when the drawer is open in chat-view, AppLayout must hide its own
+  // Research pane to avoid two right-pane surfaces appearing side-by-side.
+  const openDrawerFor = useChatStore((s) => s.annotationDrawerOpen)
+  const setOpenDrawerFor = useChatStore((s) => s.setAnnotationDrawerOpen)
+  // Clear the drawer on unmount so a freshly mounted ChatSessionContent
+  // instance (e.g. user switches from ChatPanel to WikiPageAssistant)
+  // does not pick up a stale drawer id left behind by the previous
+  // instance. This also prevents the drawer from surviving a tab
+  // switch where the active conversation changes.
+  useEffect(() => {
+    return () => {
+      useChatStore.getState().setAnnotationDrawerOpen(null)
+    }
+  }, [])
   const buildGeneratedOutputPreview = useCallback(async (ref: MessageReference): Promise<ChatReferencePreview | null> => {
     if (!project) return null
     const outputPath = projectAbsolutePath(project.path, ref.path)
@@ -1797,7 +1813,6 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
         <ChatAnnotationDrawer
           message={drawerMessage}
           open
-          width={Math.max(referencePreviewWidth, 320)}
           onClose={() => setOpenDrawerFor(null)}
         />
       )}

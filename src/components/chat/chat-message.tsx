@@ -39,6 +39,7 @@ import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-ty
 import { AgentFileActivity } from "@/components/chat/agent-file-activity"
 import { ReferenceKnowledgeGraph } from "@/components/chat/reference-knowledge-graph"
 import { PerParagraphTrigger } from "@/components/chat/annotation/PerParagraphTrigger"
+import { ChatAnnotationTrigger } from "@/components/chat/annotation/ChatAnnotationTrigger"
 import { splitMarkdownParagraphs } from "./annotation/markdown-paragraphs"
 import { ChatAnnotationInline } from "@/components/chat/annotation/ChatAnnotationInline"
 import type { SaveAnnotationResult } from "@/components/chat/annotation/SaveAnnotationToWikiDialog"
@@ -182,20 +183,17 @@ function ChatMessageImpl({
             onResolveShellCommand={onResolveShellCommand}
           />
         )}
-        {(!isUser || message.content) && (
-          <div
-            className={`rounded-lg px-3 py-2 text-sm ${
-              isUser
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-foreground"
-            }`}
-          >
-            {isUser ? (
-              <p dir="auto" className="whitespace-pre-wrap break-words">{message.content}</p>
-            ) : (
-              <AssistantParagraphs content={message.content} parentMessageId={message.id} />
-            )}
+        {isUser && message.content && (
+          <div className="rounded-lg px-3 py-2 text-sm bg-primary text-primary-foreground">
+            <p dir="auto" className="whitespace-pre-wrap break-words">{message.content}</p>
           </div>
+        )}
+        {!isUser && (
+          <ChatAnnotationTrigger message={message}>
+            <div className="rounded-lg px-3 py-2 text-sm bg-muted text-foreground">
+              <AssistantParagraphs content={message.content} parentMessageId={message.id} />
+            </div>
+          </ChatAnnotationTrigger>
         )}
         {isAssistant &&
           message.annotations?.map((annotation) => (

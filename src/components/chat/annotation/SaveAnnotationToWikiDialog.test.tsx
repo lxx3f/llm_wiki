@@ -60,7 +60,7 @@ describe("SaveAnnotationToWikiDialog", () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it("initializes the title input from the annotation snippet (first 40 chars)", () => {
+  it("renders the modal portal under document.body", () => {
     const { container } = render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
@@ -69,13 +69,63 @@ describe("SaveAnnotationToWikiDialog", () => {
         onSave={async () => ({ ok: true })}
       />,
     )
-    const input = container.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
+
+    expect(container.querySelector("[data-testid='save-annotation-to-wiki-dialog']")).toBeNull()
+    expect(document.body.querySelector("[data-testid='save-annotation-to-wiki-dialog']")).toBeTruthy()
+  })
+
+  it("closes when the backdrop is clicked or Escape is pressed", () => {
+    const onClose = vi.fn()
+    render(
+      <SaveAnnotationToWikiDialog
+        annotation={annotation}
+        open
+        onClose={onClose}
+        onSave={async () => ({ ok: true })}
+      />,
+    )
+
+    fireEvent.mouseDown(document.body.querySelector("[data-testid='save-annotation-to-wiki-backdrop']")!)
+    fireEvent.keyDown(document, { key: "Escape" })
+
+    expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not close from the backdrop while saving", () => {
+    const onClose = vi.fn()
+    const onSave = vi.fn(() => new Promise<never>(() => {}))
+    render(
+      <SaveAnnotationToWikiDialog
+        annotation={annotation}
+        open
+        onClose={onClose}
+        onSave={onSave}
+      />,
+    )
+
+    fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
+    fireEvent.mouseDown(document.body.querySelector("[data-testid='save-annotation-to-wiki-backdrop']")!)
+    fireEvent.keyDown(document, { key: "Escape" })
+
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it("initializes the title input from the annotation snippet (first 40 chars)", () => {
+    render(
+      <SaveAnnotationToWikiDialog
+        annotation={annotation}
+        open
+        onClose={() => {}}
+        onSave={async () => ({ ok: true })}
+      />,
+    )
+    const input = document.body.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
     expect(input).toBeTruthy()
     expect(input.value).toBe(annotation.snippet.slice(0, 40))
   })
 
   it("updates the title when the user types", () => {
-    const { container } = render(
+    render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
@@ -83,13 +133,13 @@ describe("SaveAnnotationToWikiDialog", () => {
         onSave={async () => ({ ok: true })}
       />,
     )
-    const input = container.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
+    const input = document.body.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
     fireEvent.change(input, { target: { value: "My Custom Title" } })
     expect(input.value).toBe("My Custom Title")
   })
 
   it("renders snippet and thread checkboxes, both toggleable", () => {
-    const { container } = render(
+    render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
@@ -97,7 +147,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         onSave={async () => ({ ok: true })}
       />,
     )
-    const checkboxes = container.querySelectorAll("input[type='checkbox']")
+    const checkboxes = document.body.querySelectorAll("input[type='checkbox']")
     expect(checkboxes.length).toBe(2)
     // Defaults: includeSnippet = true, includeThread = false
     expect((checkboxes[0] as HTMLInputElement).checked).toBe(true)
@@ -173,7 +223,7 @@ describe("SaveAnnotationToWikiDialog", () => {
 
   it("includes thread content when includeThread is checked", async () => {
     const onSave = vi.fn().mockResolvedValue({ ok: true })
-    const { container } = render(
+    render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
@@ -181,7 +231,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         onSave={onSave}
       />,
     )
-    const threadCheckbox = container.querySelectorAll("input[type='checkbox']")[1]
+    const threadCheckbox = document.body.querySelectorAll("input[type='checkbox']")[1]
     fireEvent.click(threadCheckbox)
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
@@ -194,7 +244,7 @@ describe("SaveAnnotationToWikiDialog", () => {
 
   it("omits the snippet quote when includeSnippet is unchecked", async () => {
     const onSave = vi.fn().mockResolvedValue({ ok: true })
-    const { container } = render(
+    render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
@@ -202,7 +252,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         onSave={onSave}
       />,
     )
-    const snippetCheckbox = container.querySelectorAll("input[type='checkbox']")[0]
+    const snippetCheckbox = document.body.querySelectorAll("input[type='checkbox']")[0]
     fireEvent.click(snippetCheckbox)
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
@@ -212,7 +262,7 @@ describe("SaveAnnotationToWikiDialog", () => {
 
   it("uses a sanitized targetPath when the title contains special characters", async () => {
     const onSave = vi.fn().mockResolvedValue({ ok: true })
-    const { container } = render(
+    render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
@@ -220,7 +270,7 @@ describe("SaveAnnotationToWikiDialog", () => {
         onSave={onSave}
       />,
     )
-    const input = container.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
+    const input = document.body.querySelector("input[type='text'], input:not([type])") as HTMLInputElement
     fireEvent.change(input, { target: { value: "Hello / World?" } })
     fireEvent.click(document.body.querySelector("button[data-role='confirm']")!)
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
@@ -232,7 +282,7 @@ describe("SaveAnnotationToWikiDialog", () => {
 
   it("surfaces an error message and retry button when onSave rejects", async () => {
     const onSave = vi.fn().mockRejectedValue(new Error("network failure"))
-    const { container, findByText } = render(
+    const { findByText } = render(
       <SaveAnnotationToWikiDialog
         annotation={annotation}
         open
@@ -251,7 +301,7 @@ describe("SaveAnnotationToWikiDialog", () => {
     // Confirm-button is replaced by a retry button when an error is
     // surfaced. Assert the retry button is present and labeled with
     // the localized "重试" copy.
-    const retryButton = container.querySelector("button[data-role='retry']")
+    const retryButton = document.body.querySelector("button[data-role='retry']")
     expect(retryButton).toBeTruthy()
     expect(retryButton?.textContent).toMatch(/重试/)
   })

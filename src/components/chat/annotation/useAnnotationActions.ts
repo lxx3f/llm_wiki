@@ -70,7 +70,7 @@ export interface AnnotationActions {
    * routes events to the annotation thread. Returns the new
    * annotation id, or `null` if creation was rejected.
    */
-  askAnnotationQuestion: (args: AskAnnotationQuestionArgs) => string | null
+  askAnnotationQuestion: (args: AskAnnotationQuestionArgs) => Promise<string | null>
 }
 
 export function useAnnotationActions(): AnnotationActions {
@@ -95,9 +95,9 @@ export function useAnnotationActions(): AnnotationActions {
   )
 
   const askAnnotationQuestion = useCallback(
-    (args: AskAnnotationQuestionArgs): string | null => {
+    async (args: AskAnnotationQuestionArgs): Promise<string | null> => {
       try {
-        return storeAskAnnotationQuestion(args)
+        return await storeAskAnnotationQuestion(args)
       } catch {
         // Same swallow-and-return-null pattern as `createAnnotation`:
         // the parent message may have been pruned while the user was

@@ -22,7 +22,8 @@
  * the agent confirms the write — but the dialog itself stays free
  * of side effects so it's trivially testable.
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import type { ChatAnnotation } from "../../../lib/chat-agent-types"
 
@@ -121,8 +122,6 @@ export function SaveAnnotationToWikiDialog({
   const [busy, setBusy] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
-  if (!open) return null
-
   const resetState = () => {
     setBusy(false)
     setErrorText(null)
@@ -140,13 +139,9 @@ export function SaveAnnotationToWikiDialog({
         onClose()
         return
       }
-      // Parent reported a logical failure (e.g. user canceled at the
-      // agent confirmation). Surface a localized message and keep
-      // the dialog open with a retry button.
       setBusy(false)
       setErrorText(t("annotation.saveToWiki.error.cancelled"))
     } catch (err) {
-      // Parent threw — bubble the message up but keep the dialog open.
       setBusy(false)
       const message = err instanceof Error ? err.message : String(err)
       setErrorText(t("annotation.saveToWiki.error.failure", { message }))
@@ -154,96 +149,127 @@ export function SaveAnnotationToWikiDialog({
   }
 
   const handleRetry = () => {
-    // Reset the error state then re-run the save. Title/toggles are
-    // preserved so the user doesn't have to re-enter them.
     setErrorText(null)
     void handleSave()
   }
 
-  return (
-    <dialog
-      open
-      data-testid="save-annotation-to-wiki-dialog"
-      aria-label={t("annotation.saveToWiki.title")}
-      className="rounded border border-border bg-background p-4 text-sm shadow-md w-[420px]"
+  useEffect(() => {
+    if (!open || busy) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        resetState()
+        onClose()
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [busy, onClose, open])
+
+  if (!open || typeof document === "undefined") return null
+
+  const handleBackdropMouseDown = () => {
+    if (!busy) {
+      resetState()
+      onClose()
+    }
+  }
+
+  return createPortal(
+    <div
+      data-testid="save-annotation-to-wiki-backdrop"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+      role="presentation"
+      onMouseDown={handleBackdropMouseDown}
     >
-      <h3 className="text-base font-medium">{t("annotation.saveToWiki.title")}</h3>
-      <p className="mt-2 text-muted-foreground">{t("annotation.saveToWiki.description")}</p>
-      <label className="mt-3 block">
-        <span className="text-xs">{t("annotation.saveToWiki.titleLabel")}</span>
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          disabled={busy}
-          className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-sm disabled:opacity-60"
-        />
-      </label>
-      <div className="mt-2 space-y-1">
-        <label className="flex items-center gap-2 text-xs">
+      <div
+        data-testid="save-annotation-to-wiki-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("annotation.saveToWiki.title")}
+        className="w-full max-w-[420px] rounded border border-border bg-background p-4 text-sm shadow-md"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <h3 className="text-base font-medium">{t("annotation.saveToWiki.title")}</h3>
+        <p className="mt-2 text-muted-foreground">{t("annotation.saveToWiki.description")}</p>
+        <label className="mt-3 block">
+          <span className="text-xs">{t("annotation.saveToWiki.titleLabel")}</span>
           <input
-            type="checkbox"
-            checked={includeSnippet}
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
             disabled={busy}
-            onChange={(e) => setIncludeSnippet(e.target.checked)}
+            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-sm disabled:opacity-60"
           />
-          {t("annotation.saveToWiki.includeSnippet")}
         </label>
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={includeThread}
-            disabled={busy}
-            onChange={(e) => setIncludeThread(e.target.checked)}
-          />
-          {t("annotation.saveToWiki.includeThread")}
-        </label>
-      </div>
-      {errorText && (
-        <p
-          role="alert"
-          data-testid="save-annotation-to-wiki-error"
-          className="mt-2 rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-700"
-        >
-          {errorText}
-        </p>
-      )}
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          data-role="cancel"
-          onClick={() => {
-            resetState()
-            onClose()
-          }}
-          disabled={busy}
-          className="rounded border border-border bg-background px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {t("annotation.saveToWiki.cancel")}
-        </button>
-        {errorText ? (
-          <button
-            type="button"
-            data-role="retry"
-            onClick={handleRetry}
-            className="rounded border border-amber-500 bg-amber-500 px-3 py-1 text-xs text-white"
+        <div className="mt-2 space-y-1">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={includeSnippet}
+              disabled={busy}
+              onChange={(e) => setIncludeSnippet(e.target.checked)}
+            />
+            {t("annotation.saveToWiki.includeSnippet")}
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={includeThread}
+              disabled={busy}
+              onChange={(e) => setIncludeThread(e.target.checked)}
+            />
+            {t("annotation.saveToWiki.includeThread")}
+          </label>
+        </div>
+        {errorText && (
+          <p
+            role="alert"
+            data-testid="save-annotation-to-wiki-error"
+            className="mt-2 rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-700"
           >
-            {t("annotation.saveToWiki.retry")}
-          </button>
-        ) : (
-          <button
-            type="button"
-            data-role="confirm"
-            onClick={handleSave}
-            disabled={busy}
-            className="rounded border border-blue-500 bg-blue-500 px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {busy
-              ? t("annotation.saveToWiki.saving")
-              : t("annotation.saveToWiki.confirm")}
-          </button>
+            {errorText}
+          </p>
         )}
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            data-role="cancel"
+            onClick={() => {
+              resetState()
+              onClose()
+            }}
+            disabled={busy}
+            className="rounded border border-border bg-background px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t("annotation.saveToWiki.cancel")}
+          </button>
+          {errorText ? (
+            <button
+              type="button"
+              data-role="retry"
+              onClick={handleRetry}
+              className="rounded border border-amber-500 bg-amber-500 px-3 py-1 text-xs text-white"
+            >
+              {t("annotation.saveToWiki.retry")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-role="confirm"
+              onClick={handleSave}
+              disabled={busy}
+              className="rounded border border-blue-500 bg-blue-500 px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy
+                ? t("annotation.saveToWiki.saving")
+                : t("annotation.saveToWiki.confirm")}
+            </button>
+          )}
+        </div>
       </div>
-    </dialog>
+    </div>,
+    document.body,
   )
 }

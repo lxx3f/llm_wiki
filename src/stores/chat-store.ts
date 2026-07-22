@@ -56,6 +56,7 @@ export interface DisplayMessage {
   pendingSchemaProposal?: ChatSchemaProposal  // staged Schema update requiring user confirmation
   pendingMemoryProposal?: ChatMemoryProposal  // staged Memory entry requiring user confirmation
   shellCommandApproval?: ChatShellCommandApproval  // resolved Shell authorization boundary for this Agent turn
+  shellApprovalRequest?: import("@/lib/chat-agent-types").ChatShellApprovalRequest  // structured pending Shell approval
   /** 旁注：snippet 锚定的子对话数组 */
   annotations?: ChatAnnotation[]
   /** 仅 annotation.thread 内 message 有此标记；用于 chatMessagesToLLM 过滤 */
@@ -134,6 +135,7 @@ interface ChatState {
   // Annotation management
   createAnnotation: (parentMessageId: string, snippet: string, range?: { start: number; end: number }) => string
   appendAnnotationMessage: (annotationId: string, role: "user" | "assistant", content: string) => void
+  appendAnnotationAgentStep: (annotationId: string, step: ChatAgentStep) => void
   resolveAnnotation: (annotationId: string) => void
   flattenAnnotation: (annotationId: string) => string[]
   setAnnotationDrawerOpen: (messageId: string | null) => void
@@ -515,38 +517,62 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   appendAnnotationMessage: (annotationId, role, content) => {
-    // Guard: an annotation that has already been flattened into the main
-    // conversation is read-only (spec §2.5). The flattened thread copy
-    // in the main conversation has already diverged from the annotation
-    // thread by this point, so further writes would silently mutate a
-    // frozen record. Silent no-op keeps the thread byte-identical to the
-    // snapshot taken at flatten time — mirroring `resolveAnnotation`'s
-    // open-only idempotency.
     const messages = get().messages
-    const parentWithAnn = messages.find((m) =>
-      m.annotations?.some((a) => a.id === annotationId),
-    )
-    const targetAnn = parentWithAnn?.annotations?.find((a) => a.id === annotationId)
+    const parentWithAnn = messages.find((message) => message.annotations?.some((annotation) => annotation.id === annotationId))
+    const targetAnn = parentWithAnn?.annotations?.find((annotation) => annotation.id === annotationId)
     if (!targetAnn || targetAnn.status === "flattened") return
 
-    const newMsg: DisplayMessage = {
-      id: nextId(),
-      role,
-      content,
-      timestamp: Date.now(),
-      conversationId: get().activeConversationId ?? "",
-      threadKind: "annotation",
-    }
+    const previous = targetAnn.thread[targetAnn.thread.length - 1]
+    const shouldAppendToPrevious = role === "assistant" && previous?.role === "assistant"
+    const nextMessage: DisplayMessage = shouldAppendToPrevious
+      ? { ...previous, content: previous.content + content }
+      : {
+          id: nextId(),
+          role,
+          content,
+          timestamp: Date.now(),
+          conversationId: parentWithAnn?.conversationId ?? "",
+          threadKind: "annotation",
+        }
     set({
-      messages: messages.map((m) => {
-        if (!m.annotations?.some((a) => a.id === annotationId)) return m
+      messages: messages.map((message) => {
+        if (!message.annotations?.some((annotation) => annotation.id === annotationId)) return message
         return {
-          ...m,
-          annotations: m.annotations.map((a) =>
-            a.id === annotationId
-              ? { ...a, thread: [...a.thread, newMsg] }
-              : a
-          ),
+          ...message,
+          annotations: message.annotations.map((annotation) => annotation.id === annotationId
+            ? { ...annotation, thread: shouldAppendToPrevious ? [...annotation.thread.slice(0, -1), nextMessage] : [...annotation.thread, nextMessage] }
+            : annotation),
+        }
+      }),
+    })
+  },
+
+  appendAnnotationAgentStep: (annotationId, step) => {
+    const messages = get().messages
+    const parentWithAnn = messages.find((message) => message.annotations?.some((annotation) => annotation.id === annotationId))
+    const targetAnn = parentWithAnn?.annotations?.find((annotation) => annotation.id === annotationId)
+    if (!targetAnn || targetAnn.status === "flattened") return
+
+    const previous = targetAnn.thread[targetAnn.thread.length - 1]
+    const assistantTurn: DisplayMessage = previous?.role === "assistant"
+      ? { ...previous, agentSteps: [...(previous.agentSteps ?? []), step] }
+      : {
+          id: nextId(),
+          role: "assistant",
+          content: "",
+          timestamp: Date.now(),
+          conversationId: parentWithAnn?.conversationId ?? "",
+          threadKind: "annotation",
+          agentSteps: [step],
+        }
+    set({
+      messages: messages.map((message) => {
+        if (!message.annotations?.some((annotation) => annotation.id === annotationId)) return message
+        return {
+          ...message,
+          annotations: message.annotations.map((annotation) => annotation.id === annotationId
+            ? { ...annotation, thread: previous?.role === "assistant" ? [...annotation.thread.slice(0, -1), assistantTurn] : [...annotation.thread, assistantTurn] }
+            : annotation),
         }
       }),
     })

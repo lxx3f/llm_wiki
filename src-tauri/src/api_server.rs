@@ -2000,6 +2000,9 @@ fn handle_chat(app: &AppHandle, project_id: &str, body: &str) -> ApiResponse {
         Ok(req) => req,
         Err(e) => return err(400, format!("Invalid JSON: {e}")),
     };
+    // Auto-accept is a transient desktop Chat interaction preference. HTTP API
+    // and MCP callers cannot use a request flag to broaden shell execution.
+    req.auto_accept_safe_shell_commands = false;
     if req
         .session_id
         .as_deref()

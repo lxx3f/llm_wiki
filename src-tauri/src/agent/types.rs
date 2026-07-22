@@ -161,6 +161,11 @@ pub struct AgentChatRequest {
     // appear in approved_shell_commands before the runtime will execute it.
     #[serde(default)]
     pub shell_command: Option<String>,
+    /// Desktop Chat's temporary, per-request preference. The runtime only uses
+    /// this after rejecting hard-deny patterns and confirming a safe binary.
+    /// API/MCP entry points must clear it before invoking the runtime.
+    #[serde(default)]
+    pub auto_accept_safe_shell_commands: bool,
     #[serde(default)]
     pub images: Vec<AgentImage>,
     /// Optional annotation follow-up context. When present, the chat request is
@@ -202,6 +207,7 @@ impl Default for AgentChatRequest {
             skill_mode: AgentSkillMode::default(),
             approved_shell_commands: Vec::new(),
             shell_command: None,
+            auto_accept_safe_shell_commands: false,
             images: Vec::new(),
             annotation: None,
             stream: None,

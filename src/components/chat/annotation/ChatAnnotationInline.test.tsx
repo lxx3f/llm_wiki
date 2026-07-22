@@ -98,6 +98,35 @@ describe("ChatAnnotationInline", () => {
     expect(getByText(/A\./)).toBeTruthy()
   })
 
+  it("shows assistant tool steps as expandable activity instead of Markdown text", () => {
+    const annotationWithTool = {
+      ...annotation,
+      thread: [
+        {
+          id: "t-tool",
+          role: "assistant" as const,
+          content: "**PI** rescales positions.",
+          conversationId: "c1",
+          timestamp: 3,
+          agentSteps: [
+            { id: "call", type: "tool_call" as const, tool: "project_file_read" as const, toolRaw: "wiki.read_page", input: "wiki/concepts/pi.md", message: "wiki/concepts/pi.md", status: "running" as const, timestamp: 3 },
+            { id: "result", type: "tool_result" as const, tool: "project_file_read" as const, toolRaw: "wiki.read_page", output: `1 # PI
+Knowledge context: {...}`, status: "success" as const, timestamp: 4 },
+          ],
+        },
+      ],
+    }
+    const { getByText, getByTitle, getByTestId, queryByText } = render(
+      <ChatAnnotationInline annotation={annotationWithTool} />,
+    )
+
+    fireEvent.click(getByText(/展开/).closest("button")!)
+    expect(getByText("PI")).toBeTruthy()
+    expect(queryByText("Knowledge context: {...}")).toBeNull()
+    fireEvent.click(getByTitle("Tool name").closest("button")!)
+    expect(getByTestId("tool-detail-panel").textContent).toContain("Knowledge context: {...}")
+  })
+
   it("renders a wiki backlink chip only when wikiPath is set", () => {
     const annotationWithWikiPath = {
       ...annotation,

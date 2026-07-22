@@ -7,7 +7,7 @@ const sessionId = "c1"
 const runId = "ui-ann-1"
 
 function payload(
-  event: { type: string; text?: string; message?: string; output?: string },
+  event: { type: string; text?: string; message?: string; tool?: string; input?: string; output?: string },
   overrides: { sessionId?: string; runId?: string } = {},
 ) {
   return {
@@ -106,5 +106,53 @@ describe("processAnnotationEvent", () => {
       threadKind: "annotation",
     })
     expect(useChatStore.getState().streamingTargets.annotations.has(annotationId)).toBe(true)
+  })
+
+  it("keeps tool lifecycle output out of the annotation Markdown body", () => {
+    processAnnotationEvent(
+      payload({ type: "toolStart", tool: "wiki.read_page", input: "wiki/concepts/pi.md" }),
+      annotationId, runId, sessionId,
+    )
+    processAnnotationEvent(
+      payload({ type: "toolEnd", tool: "wiki.read_page", output: `1 ---
+2 # PI
+Knowledge context: {...}` }),
+      annotationId, runId, sessionId,
+    )
+
+    const thread = useChatStore.getState().messages[0].annotations?.[0].thread ?? []
+    expect(thread).toHaveLength(1)
+    expect(thread[0]).toMatchObject({ role: "assistant", content: "", threadKind: "annotation" })
+    expect(thread[0].agentSteps).toEqual([
+      expect.objectContaining({ type: "tool_call", toolRaw: "wiki.read_page", input: "wiki/concepts/pi.md", status: "running" }),
+      expect.objectContaining({ type: "tool_result", toolRaw: "wiki.read_page", output: `1 ---
+2 # PI
+Knowledge context: {...}`, status: "success" }),
+    ])
+  })
+
+  it("adds only messageDelta text to the assistant answer after tool activity", () => {
+    processAnnotationEvent(payload({ type: "toolStart", tool: "wiki.read_page", input: "wiki/concepts/pi.md" }), annotationId, runId, sessionId)
+    processAnnotationEvent(payload({ type: "toolEnd", tool: "wiki.read_page", output: "tool output" }), annotationId, runId, sessionId)
+    processAnnotationEvent(payload({ type: "messageDelta", text: "**PI** is position interpolation." }), annotationId, runId, sessionId)
+
+    const message = useChatStore.getState().messages[0].annotations?.[0].thread[0]
+    expect(message?.content).toBe("**PI** is position interpolation.")
+    expect(message?.content).not.toContain("tool output")
+    expect(message?.agentSteps).toHaveLength(2)
+  })
+
+  it("marks failed tool output as an error", () => {
+    processAnnotationEvent(payload({ type: "toolStart", tool: "wiki.search", input: "PI" }), annotationId, runId, sessionId)
+    processAnnotationEvent(payload({ type: "toolEnd", tool: "wiki.search", output: "failed: search index unavailable" }), annotationId, runId, sessionId)
+
+    const steps = useChatStore.getState().messages[0].annotations?.[0].thread[0].agentSteps
+    expect(steps?.[1]).toMatchObject({ type: "tool_result", status: "error", output: "failed: search index unavailable" })
+  })
+
+  it("ignores unknown non-text events", () => {
+    processAnnotationEvent(payload({ type: "referenceAdded", output: "should not render" }), annotationId, runId, sessionId)
+    const annotation = useChatStore.getState().messages[0].annotations?.[0]
+    expect(annotation?.thread).toHaveLength(0)
   })
 })

@@ -654,8 +654,24 @@ impl AgentRuntime {
                 retrieval_parts.push(detail);
             } else {
                 permission_policy.require(AgentCapability::Process)?;
-                if !is_shell_command_approved(command, &request.approved_shell_commands) {
+                if !is_shell_command_allowed_with_policy(
+                    command,
+                    &request.approved_shell_commands,
+                    &self.project_path,
+                    self.enhanced_shell_mode,
+                    request.auto_accept_safe_shell_commands,
+                ) {
                     let detail = format!("approval required: {command}");
+                    emit_event(
+                        &mut events,
+                        &event_sink,
+                        AgentEvent::ShellApprovalRequired {
+                            command: command.to_string(),
+                            classification: shell_approval_classification(command).to_string(),
+                            reasons: shell_approval_reasons(command),
+                            annotation_id: None,
+                        },
+                    );
                     emit_event(
                         &mut events,
                         &event_sink,
@@ -2254,6 +2270,16 @@ impl AgentRuntime {
                 emit_event(
                     events,
                     event_sink,
+                    AgentEvent::ShellApprovalRequired {
+                        command: command.to_string(),
+                        classification: shell_approval_classification(command).to_string(),
+                        reasons: shell_approval_reasons(command),
+                        annotation_id: None,
+                    },
+                );
+                emit_event(
+                    events,
+                    event_sink,
                     AgentEvent::tool_start("shell.exec", Some(command.to_string())),
                 );
                 emit_event(
@@ -2275,13 +2301,24 @@ impl AgentRuntime {
                     event_sink,
                 ));
             }
-            if !is_shell_command_allowed_without_prompt(
+            if !is_shell_command_allowed_with_policy(
                 command,
                 &request.approved_shell_commands,
                 &self.project_path,
                 self.enhanced_shell_mode,
+                request.auto_accept_safe_shell_commands,
             ) {
                 let detail = format!("approval required: {command}");
+                emit_event(
+                    events,
+                    event_sink,
+                    AgentEvent::ShellApprovalRequired {
+                        command: command.to_string(),
+                        classification: shell_approval_classification(command).to_string(),
+                        reasons: shell_approval_reasons(command),
+                        annotation_id: None,
+                    },
+                );
                 emit_event(
                     events,
                     event_sink,
@@ -4629,6 +4666,16 @@ fn is_shell_command_allowed_without_prompt(
     project_path: &str,
     enhanced_mode: bool,
 ) -> bool {
+    is_shell_command_allowed_with_policy(command, approved, project_path, enhanced_mode, false)
+}
+
+fn is_shell_command_allowed_with_policy(
+    command: &str,
+    approved: &[String],
+    project_path: &str,
+    enhanced_mode: bool,
+    auto_accept_safe: bool,
+) -> bool {
     // A user-approved exact command is the only route through the manual
     // approval boundary. It must be checked first so commands that were
     // deliberately held for approval (network, privilege escalation, etc.)
@@ -4645,7 +4692,7 @@ fn is_shell_command_allowed_without_prompt(
     }
 
     is_shell_command_scoped_to_agent_workspace(command, project_path)
-        || (enhanced_mode && shell_command_uses_safe_binary(command))
+        || ((enhanced_mode || auto_accept_safe) && shell_command_uses_safe_binary(command))
 }
 
 /// True when the command's program token (basename of the first
@@ -4706,6 +4753,24 @@ fn shell_command_program_tokens(command: &str) -> Vec<String> {
         programs.push(current);
     }
     programs
+}
+
+fn shell_approval_classification(command: &str) -> &'static str {
+    if shell_command_hits_deny_patterns(command) { "hard_deny" } else { "safe_eligible" }
+}
+
+fn shell_approval_reasons(command: &str) -> Vec<String> {
+    let lower = command.trim().to_ascii_lowercase();
+    let mut reasons = Vec::new();
+    if SHELL_DENY_TOKENS.iter().any(|token| shell_command_contains_token(&lower, token)) {
+        if ["curl", "wget", "scp", "ssh", "nc", "telnet", "rsync", "ftp"].iter().any(|token| shell_command_contains_token(&lower, token)) { reasons.push("network".to_string()); }
+        if ["sudo", "doas", "runas", "su"].iter().any(|token| shell_command_contains_token(&lower, token)) { reasons.push("privilege_escalation".to_string()); }
+        if ["env", "command", "exec", "sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh", "xargs", "nice", "nohup"].iter().any(|token| shell_command_contains_token(&lower, token)) { reasons.push("shell_wrapper".to_string()); }
+    }
+    if lower.contains("$(") || lower.contains('`') { reasons.push("command_substitution".to_string()); }
+    if ["/etc/", "/boot/", "/proc/", "/sys/", "/system/", "c:/windows", r"c:\windows", "c:/program files", r"c:\program files"].iter().any(|needle| lower.contains(needle)) { reasons.push("system_path".to_string()); }
+    if reasons.is_empty() { reasons.push("unsafe_or_unknown".to_string()); }
+    reasons
 }
 
 /// True when `command` matches any of the hard-deny token or substring
@@ -7469,4 +7534,24 @@ mod tests {
         let too_many = vec![valid; MAX_IMAGES_PER_TURN + 1];
         assert!(validate_images(&too_many).is_err());
     }
+
+    #[test]
+    fn session_auto_accept_allows_only_safe_binaries_after_hard_deny_gate() {
+        let project = "/tmp/project";
+        assert!(is_shell_command_allowed_with_policy(
+            "ls -la /tmp", &[], project, false, true,
+        ));
+        assert!(!is_shell_command_allowed_with_policy(
+            "curl https://example.com", &[], project, false, true,
+        ));
+        assert!(!is_shell_command_allowed_with_policy(
+            "bash -c 'ls'", &[], project, false, true,
+        ));
+        assert!(!is_shell_command_allowed_with_policy(
+            "custom-tool /tmp/outside", &[], project, false, true,
+        ));
+        assert_eq!(shell_approval_classification("curl https://example.com"), "hard_deny");
+        assert_eq!(shell_approval_reasons("sudo id"), vec!["privilege_escalation"]);
+    }
+
 }

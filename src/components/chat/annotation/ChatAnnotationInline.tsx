@@ -21,6 +21,7 @@ import { useAnnotationActions } from "./useAnnotationActions"
 import { ChatAnnotationFlattenDialog } from "./ChatAnnotationFlattenDialog"
 import { SaveAnnotationToWikiDialog, type SaveAnnotationResult } from "./SaveAnnotationToWikiDialog"
 import { MarkdownContent } from "../MarkdownContent"
+import { SavedAgentActivity } from "../agent-activity"
 
 interface ChatAnnotationInlineProps {
   annotation: ChatAnnotation
@@ -97,7 +98,10 @@ export function ChatAnnotationInline({ annotation, onSaveAnnotation }: ChatAnnot
                   : t("annotation.role.assistant")}
                 :
               </strong>{" "}
-              <MarkdownContent content={message.content} />
+              {message.role === "assistant" && message.agentSteps && (
+                <SavedAgentActivity steps={message.agentSteps} />
+              )}
+              {message.content && <MarkdownContent content={message.content} />}
             </div>
           ))}
           {annotation.wikiPath && (

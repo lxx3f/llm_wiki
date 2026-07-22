@@ -30,6 +30,13 @@ pub enum AgentEvent {
         #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
         annotation_id: Option<String>,
     },
+    ShellApprovalRequired {
+        command: String,
+        classification: String,
+        reasons: Vec<String>,
+        #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]
+        annotation_id: Option<String>,
+    },
     ReferenceAdded {
         reference: AgentReference,
         #[serde(rename = "annotationId", skip_serializing_if = "Option::is_none")]

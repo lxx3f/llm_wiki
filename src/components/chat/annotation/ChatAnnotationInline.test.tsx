@@ -18,14 +18,24 @@ vi.mock("./useAnnotationActions", () => ({
   }),
 }))
 
-vi.mock("@/stores/wiki-store", () => ({
-  useWikiStore: {
+vi.mock("@/stores/wiki-store", () => {
+  // `useWikiStore` is also used directly by `MarkdownContent`
+  // (extracted from `chat-message.tsx` for the annotation thread
+  // rendering). The selector needs to be a no-op that returns a
+  // minimal wiki-store shape so the markdown pipeline doesn't crash
+  // when it tries to resolve a project path / open a wiki page.
+  const noopSelector = () => ({
+    project: null,
+    openFileInPreview: vi.fn(),
+  })
+  const useWikiStore = Object.assign(noopSelector, {
     getState: () => ({
       setActiveView: mockSetActiveView,
       setSelectedFile: mockSetSelectedFile,
     }),
-  },
-}))
+  })
+  return { useWikiStore }
+})
 
 const annotation = {
   id: "ann_1",
@@ -88,6 +98,35 @@ describe("ChatAnnotationInline", () => {
     expect(getByText(/A\./)).toBeTruthy()
   })
 
+  it("shows assistant tool steps as expandable activity instead of Markdown text", () => {
+    const annotationWithTool = {
+      ...annotation,
+      thread: [
+        {
+          id: "t-tool",
+          role: "assistant" as const,
+          content: "**PI** rescales positions.",
+          conversationId: "c1",
+          timestamp: 3,
+          agentSteps: [
+            { id: "call", type: "tool_call" as const, tool: "project_file_read" as const, toolRaw: "wiki.read_page", input: "wiki/concepts/pi.md", message: "wiki/concepts/pi.md", status: "running" as const, timestamp: 3 },
+            { id: "result", type: "tool_result" as const, tool: "project_file_read" as const, toolRaw: "wiki.read_page", output: `1 # PI
+Knowledge context: {...}`, status: "success" as const, timestamp: 4 },
+          ],
+        },
+      ],
+    }
+    const { getByText, getByTitle, getByTestId, queryByText } = render(
+      <ChatAnnotationInline annotation={annotationWithTool} />,
+    )
+
+    fireEvent.click(getByText(/展开/).closest("button")!)
+    expect(getByText("PI")).toBeTruthy()
+    expect(queryByText("Knowledge context: {...}")).toBeNull()
+    fireEvent.click(getByTitle("Tool name").closest("button")!)
+    expect(getByTestId("tool-detail-panel").textContent).toContain("Knowledge context: {...}")
+  })
+
   it("renders a wiki backlink chip only when wikiPath is set", () => {
     const annotationWithWikiPath = {
       ...annotation,
@@ -116,18 +155,55 @@ describe("ChatAnnotationInline", () => {
     // `flattenAnnotation` directly — it must surface the
     // confirmation dialog first, and only the dialog's confirm
     // button calls flatten.
-    const { getByText, queryByText } = render(
+    const { getByText, queryByTestId } = render(
       <ChatAnnotationInline annotation={annotation} />,
     )
     // Expand so the action buttons render.
     fireEvent.click(getByText(/展开/).closest("button")!)
     // Sanity: the dialog is closed initially.
-    expect(queryByText(/插入主会话/)).toBeTruthy()
+    expect(queryByTestId("flatten-annotation-dialog")).toBeNull()
     // Click the flatten button — its visible text is exactly "插入主会话".
     const flattenButton = getByText("插入主会话").closest("button")!
     fireEvent.click(flattenButton)
-    // The dialog (which also contains the "插入主会话" header)
-    // should now be mounted — no direct call to flatten yet.
+    // The flatten dialog must now be visible (Bug 3 regression check:
+    // "插入主会话 button has no effect" — the dialog MUST mount).
+    expect(queryByTestId("flatten-annotation-dialog")).toBeTruthy()
+    // No direct call to flatten yet — the dialog gates it.
     expect(mockFlatten).not.toHaveBeenCalled()
+    // Confirming the dialog calls flattenAnnotation + closes the dialog.
+    fireEvent.click(getByText(/确认插入/).closest("button")!)
+    expect(mockFlatten).toHaveBeenCalledWith(annotation.id)
+    expect(queryByTestId("flatten-annotation-dialog")).toBeNull()
+  })
+
+  it("'保存为 Wiki' button opens the save-to-wiki dialog when onSaveAnnotation is provided", () => {
+    const onSaveAnnotation = vi.fn().mockResolvedValue({ ok: true })
+    const { getByText, getByTestId } = render(
+      <ChatAnnotationInline
+        annotation={annotation}
+        onSaveAnnotation={onSaveAnnotation}
+      />,
+    )
+    // Expand so the action buttons render.
+    fireEvent.click(getByText(/展开/).closest("button")!)
+    // Bug 4 regression check: the save-to-wiki button must be visible
+    // when an `onSaveAnnotation` dispatcher is supplied (assistant-only
+    // gating happens at the parent in `ChatSessionContent`).
+    const saveButton = getByTestId("save-annotation-to-wiki-trigger")
+    expect(saveButton).toBeTruthy()
+    // Clicking it must open the dialog (not be a no-op).
+    fireEvent.click(saveButton)
+    const dialog = getByTestId("save-annotation-to-wiki-dialog")
+    expect(dialog).toBeTruthy()
+  })
+
+  it("hides the save-to-wiki button when onSaveAnnotation is not provided", () => {
+    const { getByText, queryByTestId } = render(
+      <ChatAnnotationInline annotation={annotation} />,
+    )
+    fireEvent.click(getByText(/展开/).closest("button")!)
+    expect(queryByTestId("save-annotation-to-wiki-trigger")).toBeNull()
+    // Save dialog must not be in the DOM either.
+    expect(queryByTestId("save-annotation-to-wiki-dialog")).toBeNull()
   })
 })

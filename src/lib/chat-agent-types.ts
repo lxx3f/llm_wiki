@@ -214,6 +214,20 @@ export interface ChatSchemaProposal {
   status: "pending" | "applied" | "rejected"
 }
 
+export type ChatShellApprovalReason =
+  | "network"
+  | "privilege_escalation"
+  | "shell_wrapper"
+  | "system_path"
+  | "command_substitution"
+  | "unsafe_or_unknown"
+
+export interface ChatShellApprovalRequest {
+  command: string
+  classification: "safe_eligible" | "hard_deny"
+  reasons: ChatShellApprovalReason[]
+}
+
 export interface ChatShellCommandApproval {
   /** Exact command presented at the authorization boundary. */
   command: string

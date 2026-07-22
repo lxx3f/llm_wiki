@@ -241,7 +241,12 @@
       "otherInstructions": "Your instructions",
       "approved": "Shell command approved; continuing",
       "rejected": "Shell command rejected; it was not run",
-      "otherResolved": "Continuing with your instructions"
+      "otherResolved": "Continuing with your instructions",
+      "autoAcceptSafe": "Auto-accept safe commands",
+      "autoAcceptHint": "This conversation only: eligible safe commands run automatically. Network access, privilege escalation, shell wrappers, system paths, and command substitution still require manual approval.",
+      "highRiskTitle": "High-risk shell command requires manual approval",
+      "reason": {"network": "Network access", "privilege_escalation": "Privilege escalation", "shell_wrapper": "Shell wrapper", "system_path": "System path", "command_substitution": "Command substitution", "unsafe_or_unknown": "Unknown or not in the safe set"},
+      "waitingMessage": "The Agent needs your approval before it can run this shell command. Review it in the approval card below."
     },
     "schemaProposal": {
       "pending": "Schema change needs approval",
@@ -1040,6 +1045,7 @@
     "action": {
       "resolve": "✓ Got it",
       "flatten": "Insert into main conversation",
+      "saveToWiki": "Save as Wiki",
       "openInDrawer": "Open in drawer",
       "openDrawer": "Open annotation drawer"
     },

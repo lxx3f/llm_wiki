@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from "react"
+import { Fragment, useRef, useEffect, useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
@@ -78,6 +78,9 @@ interface BackendAgentEventPayload {
     pendingWrite?: ChatPendingWikiWrite
     proposal?: ChatSchemaProposal
     memory?: ChatMemoryProposal
+    command?: string
+    classification?: "safe_eligible" | "hard_deny"
+    reasons?: import("@/lib/chat-agent-types").ChatShellApprovalReason[]
     /**
      * When set, the event belongs to an annotation follow-up turn and must
      * route to that annotation's thread instead of the main conversation.
@@ -431,6 +434,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   const activeMessages = activeConversationId
     ? allMessages.filter((m) => m.conversationId === activeConversationId)
     : []
+  useEffect(() => setAutoAcceptSafeShellCommands(false), [activeConversationId])
 
   const project = useWikiStore((s) => s.project)
   const projectPathIndex = useWikiStore((s) => s.projectPathIndex)
@@ -474,6 +478,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
   const [referencePreviewWidth, setReferencePreviewWidth] = useState(420)
   const [availableSkills, setAvailableSkills] = useState<AvailableAgentSkill[]>([])
   const [approvingShellMessageId, setApprovingShellMessageId] = useState<string | null>(null)
+  const [autoAcceptSafeShellCommands, setAutoAcceptSafeShellCommands] = useState(false)
   // Right-pane annotation drawer. Holds the id of the assistant
   // message whose annotations should be listed inline. Mutually
   // exclusive with `referencePreview` and `generatedOutputPreviews`
@@ -858,6 +863,8 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           let pendingWikiWrite: ChatPendingWikiWrite | undefined
           let pendingSchemaProposal: ChatSchemaProposal | undefined
           let pendingMemoryProposal: ChatMemoryProposal | undefined
+          let shellApprovalRequest: import("@/lib/chat-agent-types").ChatShellApprovalRequest | undefined
+          let suppressApprovalMessageDeltas = false
           const backendEvents: BackendAgentToolEvent[] = []
           const fileChanges = new Map<string, ChatAgentFileChange>()
           const fileEditChanges: ChatAgentFileChange[] = []
@@ -936,7 +943,22 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
               pendingMemoryProposal = agentEvent.memory
               return
             }
+            if (agentEvent.type === "shellApprovalRequired" && agentEvent.command && agentEvent.classification && agentEvent.reasons) {
+              shellApprovalRequest = {
+                command: agentEvent.command,
+                classification: agentEvent.classification,
+                reasons: agentEvent.reasons,
+              }
+              suppressApprovalMessageDeltas = true
+              if (!accumulated.trim()) {
+                const message = t("chat.shellApproval.waitingMessage")
+                accumulated = message
+                appendStreamToken(message)
+              }
+              return
+            }
             if (agentEvent.type === "messageDelta" && agentEvent.text) {
+              if (suppressApprovalMessageDeltas) return
               accumulated += agentEvent.text
               appendStreamToken(agentEvent.text)
               return
@@ -1117,6 +1139,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                 approvedShellCommands: sendOptions.approvedShellCommands ?? [],
                 shellCommand: sendOptions.shellCommand,
                 allowUnlimitedIterations: sendOptions.allowUnlimitedIterations ?? false,
+                autoAcceptSafeShellCommands: sendOptions.autoAcceptSafeShellCommands ?? false,
                 images: images.map((image) => ({
                   mediaType: image.mediaType,
                   dataBase64: image.dataBase64,
@@ -1149,6 +1172,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           if (pendingWikiWrite) addPendingWikiWriteToMessage(convId, pendingWikiWrite)
           if (pendingSchemaProposal) addPendingSchemaProposalToMessage(convId, pendingSchemaProposal)
           if (pendingMemoryProposal) addPendingMemoryProposalToMessage(convId, pendingMemoryProposal)
+          if (shellApprovalRequest) addShellApprovalRequestToMessage(convId, shellApprovalRequest)
           if (!pendingUserInputRequest) {
             autoOpenSingleGeneratedOutput(convId, references)
           }
@@ -1196,6 +1220,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
             historyExplicit: true,
             approvedShellCommands: sendOptions.approvedShellCommands ?? [],
             shellCommand: sendOptions.shellCommand,
+            autoAcceptSafeShellCommands: sendOptions.autoAcceptSafeShellCommands ?? false,
             allowUnlimitedIterations: sendOptions.allowUnlimitedIterations ?? false,
             history: priorWireMessages,
             images: images.map((image) => ({
@@ -1555,11 +1580,8 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
     useChatStore.setState((state) => ({
       messages: state.messages.map((message) => {
         if (message.id !== messageId || message.conversationId !== activeConversationId || message.role !== "assistant") return message
-        const pendingCommand = message.agentSteps?.find((step) =>
-          step.tool === "shell_exec"
-          && step.status === "skipped"
-          && step.message?.trim().startsWith("approval required:")
-        )?.message?.trim().slice("approval required:".length).trim()
+        const pendingCommand = message.shellApprovalRequest?.command
+          ?? message.agentSteps?.find((step) => step.tool === "shell_exec" && step.status === "skipped" && step.message?.trim().startsWith("approval required:"))?.message?.trim().slice("approval required:".length).trim()
         if (pendingCommand !== normalizedCommand || message.shellCommandApproval) return message
         recorded = true
         return {
@@ -1668,6 +1690,17 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
       if (index === -1) return state
       const messageIndex = messages.length - 1 - index
       messages[messageIndex] = { ...messages[messageIndex], pendingWikiWrite: pendingWrite }
+      return { messages }
+    })
+  }, [])
+
+  const addShellApprovalRequestToMessage = useCallback((conversationId: string, shellApprovalRequest: import("@/lib/chat-agent-types").ChatShellApprovalRequest) => {
+    useChatStore.setState((state) => {
+      const index = [...state.messages].reverse().findIndex((message) => message.conversationId === conversationId && message.role === "assistant")
+      if (index === -1) return state
+      const messageIndex = state.messages.length - 1 - index
+      const messages = [...state.messages]
+      messages[messageIndex] = { ...messages[messageIndex], shellApprovalRequest }
       return { messages }
     })
   }, [])
@@ -1936,9 +1969,8 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                     const isLastAssistant = msg.role === "assistant" &&
                       !activeMessages.slice(idx + 1).some((m) => m.role === "assistant")
                     return (
-                      <>
+                      <Fragment key={`${msg.conversationId}:${msg.id}:${msg.timestamp}:${idx}`}>
                       <ChatMessage
-                        key={`${msg.conversationId}:${msg.id}:${msg.timestamp}:${idx}`}
                         message={msg}
                         isLastAssistant={isLastAssistant && !activeStreaming}
                         onRegenerate={isLastAssistant ? handleRegenerate : undefined}
@@ -1973,7 +2005,7 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
                           onReject={() => void handleRejectMemoryProposal(msg.id, msg.pendingMemoryProposal!)}
                         />
                       )}
-                      </>
+                      </Fragment>
                     )
                   })}
                   {activeStreaming && <StreamingMessage content={streamingContent} agentEvents={activeAgentEvents} />}
@@ -2015,6 +2047,8 @@ export function ChatSessionContent({ contextFiles, showConversationControls = fa
           onRetrievalModeChange={setRetrievalMode}
           onSelectedSkillsChange={setSelectedSkills}
           onSelectedContextFilesChange={setSelectedContextFiles}
+          autoAcceptSafeShellCommands={autoAcceptSafeShellCommands}
+          onAutoAcceptSafeShellCommandsChange={setAutoAcceptSafeShellCommands}
           anyTxtAvailable={anyTxtAvailable}
           imageInputAvailable={imageInputAvailable}
           placeholder={

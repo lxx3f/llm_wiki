@@ -43,18 +43,19 @@ describe("ChatAnnotationTrigger", () => {
     window.getSelection()?.removeAllRanges()
   })
 
-  it("does not open menu on right-click with empty selection", () => {
+  it("does not open popover on right-click with empty selection", () => {
     window.getSelection()?.removeAllRanges()
-    const { getByTestId } = render(
+    const { getByTestId, queryByRole } = render(
       <ChatAnnotationTrigger message={message}>
         <div data-testid="content"><span data-testid="text-target">{message.content}</span></div>
       </ChatAnnotationTrigger>
     )
     fireEvent.contextMenu(getByTestId("content"))
+    expect(queryByRole("textbox")).toBeNull()
     expect(mockAsk).not.toHaveBeenCalled()
   })
 
-  it("right-click with a non-empty selection opens the popover (not askAnnotationQuestion)", () => {
+  it("right-click with a non-empty selection opens the popover directly", () => {
     const { getByTestId, getByText, getByRole } = render(
       <ChatAnnotationTrigger message={message}>
         <div data-testid="content"><span data-testid="text-target">{message.content}</span></div>
@@ -62,9 +63,7 @@ describe("ChatAnnotationTrigger", () => {
     )
     selectWithin(getByTestId("text-target"))
     fireEvent.contextMenu(getByTestId("content"))
-    // Click the "Ask separately about this" menu item to open the popover.
-    fireEvent.click(getByRole("menuitem"))
-    // The popover should now render — snippet text and textarea.
+    // Popover should render immediately — no intermediate menu step.
     expect(getByText(/Long answer with A1, A2\./)).toBeTruthy()
     expect(getByRole("textbox")).toBeTruthy()
     expect(mockAsk).not.toHaveBeenCalled()
@@ -78,7 +77,6 @@ describe("ChatAnnotationTrigger", () => {
     )
     selectWithin(getByTestId("text-target"))
     fireEvent.contextMenu(getByTestId("content"))
-    fireEvent.click(getByRole("menuitem"))
     const ta = getByRole("textbox") as HTMLTextAreaElement
     fireEvent.change(ta, { target: { value: "explain this please" } })
     fireEvent.keyDown(ta, { key: "Enter" })

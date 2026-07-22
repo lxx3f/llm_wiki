@@ -31,6 +31,37 @@ describe("ChatAnnotationFlattenDialog", () => {
     cleanup()
   })
 
+  it("renders the modal portal under document.body", () => {
+    const { container } = render(
+      <ChatAnnotationFlattenDialog
+        annotation={annotation}
+        open
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    )
+
+    expect(container.querySelector("[data-testid='flatten-annotation-dialog']")).toBeNull()
+    expect(document.body.querySelector("[data-testid='flatten-annotation-dialog']")).toBeTruthy()
+  })
+
+  it("closes when the backdrop is clicked or Escape is pressed", () => {
+    const onClose = vi.fn()
+    render(
+      <ChatAnnotationFlattenDialog
+        annotation={annotation}
+        open
+        onClose={onClose}
+        onConfirm={() => {}}
+      />,
+    )
+
+    fireEvent.mouseDown(document.body.querySelector("[data-testid='flatten-annotation-backdrop']")!)
+    fireEvent.keyDown(document, { key: "Escape" })
+
+    expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
   it("calls onConfirm when the confirm button is clicked", () => {
     const onConfirm = vi.fn()
     render(

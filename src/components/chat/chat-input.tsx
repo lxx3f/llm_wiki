@@ -26,6 +26,7 @@ export interface ChatSendOptions {
   skillMode?: "auto" | "explicit"
   approvedShellCommands?: string[]
   shellCommand?: string
+  autoAcceptSafeShellCommands?: boolean
   // Power-user flag from Settings → Agent. When true, the rust runtime
   // lifts the per-mode iteration cap so long multi-page wiki drafts can
   // finish in one turn. Defaults to false on the wire if omitted.
@@ -152,6 +153,8 @@ interface ChatInputProps {
   onRetrievalModeChange: (mode: ChatRetrievalMode) => void
   onSelectedSkillsChange: (skills: string[]) => void
   onSelectedContextFilesChange: (paths: string[]) => void
+  autoAcceptSafeShellCommands?: boolean
+  onAutoAcceptSafeShellCommandsChange?: (enabled: boolean) => void
   anyTxtAvailable?: boolean
   imageInputAvailable?: boolean
   placeholder?: string
@@ -175,6 +178,8 @@ export function ChatInput({
   onRetrievalModeChange,
   onSelectedSkillsChange,
   onSelectedContextFilesChange,
+  autoAcceptSafeShellCommands = false,
+  onAutoAcceptSafeShellCommandsChange,
   anyTxtAvailable = true,
   imageInputAvailable = true,
   placeholder,
@@ -384,6 +389,7 @@ export function ChatInput({
       skills: selectedSkills,
       contextFiles: selectedContextFiles,
       skillMode: selectedSkills.length > 0 ? "explicit" : "auto",
+      autoAcceptSafeShellCommands,
     })
     setValue("")
     setImages([])
@@ -816,6 +822,18 @@ export function ChatInput({
                 </div>
               )}
             </div>
+            {onAutoAcceptSafeShellCommandsChange && (
+              <button
+                type="button"
+                disabled={isStreaming}
+                aria-pressed={autoAcceptSafeShellCommands}
+                title={t("chat.shellApproval.autoAcceptHint")}
+                onClick={() => onAutoAcceptSafeShellCommandsChange(!autoAcceptSafeShellCommands)}
+                className={`h-7 rounded-md border px-2 text-xs transition-colors ${autoAcceptSafeShellCommands ? "border-amber-500/60 bg-amber-500/15 text-amber-800 dark:text-amber-200" : "border-border/70 bg-muted/30 text-muted-foreground hover:bg-muted/60"} disabled:pointer-events-none disabled:opacity-50`}
+              >
+                {t("chat.shellApproval.autoAcceptSafe")}
+              </button>
+            )}
             <div
               className="inline-flex h-7 items-center rounded-md border border-border/70 bg-muted/30 p-0.5"
               role="radiogroup"

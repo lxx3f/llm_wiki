@@ -241,7 +241,12 @@
       "otherInstructions": "你的补充说明",
       "approved": "已同意 Shell 命令，正在继续",
       "rejected": "已拒绝 Shell 命令；未执行",
-      "otherResolved": "正在按你的补充说明继续"
+      "otherResolved": "正在按你的补充说明继续",
+      "autoAcceptSafe": "自动接受安全命令",
+      "autoAcceptHint": "仅本次会话：符合安全规则的命令自动执行；网络、提权、Shell 包装器、系统路径和命令替换仍需手动确认。",
+      "highRiskTitle": "高风险 Shell 命令需要手动确认",
+      "reason": {"network": "网络访问", "privilege_escalation": "权限提升", "shell_wrapper": "Shell 包装器", "system_path": "系统路径", "command_substitution": "命令替换", "unsafe_or_unknown": "未知或未列入安全范围"},
+      "waitingMessage": "Agent 需要你确认后才能执行该 Shell 命令。请在下方审批卡中查看详情并选择操作。"
     },
     "schemaProposal": {
       "pending": "Schema 变更需要确认",
@@ -1040,6 +1045,7 @@
     "action": {
       "resolve": "✓ 明白了",
       "flatten": "插入主会话",
+      "saveToWiki": "保存为 Wiki",
       "openInDrawer": "在抽屉中打开",
       "openDrawer": "打开旁注抽屉"
     },

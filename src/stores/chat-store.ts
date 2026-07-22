@@ -1,5 +1,7 @@
 import { create } from "zustand"
 import { invoke } from "@tauri-apps/api/core"
+import { listen, type UnlistenFn } from "@tauri-apps/api/event"
+import type { BackendAgentEventPayload } from "@/lib/chat-annotation-stream"
 import type { ChatMessage, ContentBlock } from "@/lib/llm-client"
 import i18n from "@/i18n"
 import type { ChatAgentFileChange, ChatAgentMode, ChatAnnotation, ChatMemoryProposal, ChatPendingWikiWrite, ChatAgentStep, ChatRetrievalMode, ChatSchemaProposal, ChatShellCommandApproval, ChatUserInputRequest } from "@/lib/chat-agent-types"
@@ -54,6 +56,7 @@ export interface DisplayMessage {
   pendingSchemaProposal?: ChatSchemaProposal  // staged Schema update requiring user confirmation
   pendingMemoryProposal?: ChatMemoryProposal  // staged Memory entry requiring user confirmation
   shellCommandApproval?: ChatShellCommandApproval  // resolved Shell authorization boundary for this Agent turn
+  shellApprovalRequest?: import("@/lib/chat-agent-types").ChatShellApprovalRequest  // structured pending Shell approval
   /** 旁注：snippet 锚定的子对话数组 */
   annotations?: ChatAnnotation[]
   /** 仅 annotation.thread 内 message 有此标记；用于 chatMessagesToLLM 过滤 */
@@ -132,6 +135,7 @@ interface ChatState {
   // Annotation management
   createAnnotation: (parentMessageId: string, snippet: string, range?: { start: number; end: number }) => string
   appendAnnotationMessage: (annotationId: string, role: "user" | "assistant", content: string) => void
+  appendAnnotationAgentStep: (annotationId: string, step: ChatAgentStep) => void
   resolveAnnotation: (annotationId: string) => void
   flattenAnnotation: (annotationId: string) => string[]
   setAnnotationDrawerOpen: (messageId: string | null) => void
@@ -150,23 +154,17 @@ interface ChatState {
   saveAnnotationToWiki: (annotationId: string, targetPath: string, content: string) => void
   /**
    * Combined annotation question dispatch (Phase 7.x): create an empty
-   * annotation row, append the user's question to its thread, then invoke
-   * the backend Agent with `annotation` context so the streamed response
-   * routes back to the annotation thread (via the existing stream listener
-   * + `routeAgentEventToAnnotation` helper). Returns the new annotation id,
-   * or `null` if creation was rejected (parent message gone, etc.).
-   *
-   * The actual stream listener already lives on `ChatSessionContent`; this
-   * action does NOT register a new listener. It just fires the
-   * `agent_start_turn_stream` Tauri command and lets the existing listener
-   * pick up the events.
+   * annotation row, append the user's question to its thread, register a
+   * run-scoped event listener, then invoke the backend Agent with annotation
+   * context. Returns the new annotation id, or `null` if creation was rejected
+   * (parent message gone, etc.).
    */
   askAnnotationQuestion: (args: {
     parentMessageId: string
     snippet: string
     range?: { start: number; end: number }
     question: string
-  }) => string | null
+  }) => Promise<string | null>
 
   // Helpers
   getActiveMessages: () => DisplayMessage[]
@@ -519,38 +517,62 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   appendAnnotationMessage: (annotationId, role, content) => {
-    // Guard: an annotation that has already been flattened into the main
-    // conversation is read-only (spec §2.5). The flattened thread copy
-    // in the main conversation has already diverged from the annotation
-    // thread by this point, so further writes would silently mutate a
-    // frozen record. Silent no-op keeps the thread byte-identical to the
-    // snapshot taken at flatten time — mirroring `resolveAnnotation`'s
-    // open-only idempotency.
     const messages = get().messages
-    const parentWithAnn = messages.find((m) =>
-      m.annotations?.some((a) => a.id === annotationId),
-    )
-    const targetAnn = parentWithAnn?.annotations?.find((a) => a.id === annotationId)
+    const parentWithAnn = messages.find((message) => message.annotations?.some((annotation) => annotation.id === annotationId))
+    const targetAnn = parentWithAnn?.annotations?.find((annotation) => annotation.id === annotationId)
     if (!targetAnn || targetAnn.status === "flattened") return
 
-    const newMsg: DisplayMessage = {
-      id: nextId(),
-      role,
-      content,
-      timestamp: Date.now(),
-      conversationId: get().activeConversationId ?? "",
-      threadKind: "annotation",
-    }
+    const previous = targetAnn.thread[targetAnn.thread.length - 1]
+    const shouldAppendToPrevious = role === "assistant" && previous?.role === "assistant"
+    const nextMessage: DisplayMessage = shouldAppendToPrevious
+      ? { ...previous, content: previous.content + content }
+      : {
+          id: nextId(),
+          role,
+          content,
+          timestamp: Date.now(),
+          conversationId: parentWithAnn?.conversationId ?? "",
+          threadKind: "annotation",
+        }
     set({
-      messages: messages.map((m) => {
-        if (!m.annotations?.some((a) => a.id === annotationId)) return m
+      messages: messages.map((message) => {
+        if (!message.annotations?.some((annotation) => annotation.id === annotationId)) return message
         return {
-          ...m,
-          annotations: m.annotations.map((a) =>
-            a.id === annotationId
-              ? { ...a, thread: [...a.thread, newMsg] }
-              : a
-          ),
+          ...message,
+          annotations: message.annotations.map((annotation) => annotation.id === annotationId
+            ? { ...annotation, thread: shouldAppendToPrevious ? [...annotation.thread.slice(0, -1), nextMessage] : [...annotation.thread, nextMessage] }
+            : annotation),
+        }
+      }),
+    })
+  },
+
+  appendAnnotationAgentStep: (annotationId, step) => {
+    const messages = get().messages
+    const parentWithAnn = messages.find((message) => message.annotations?.some((annotation) => annotation.id === annotationId))
+    const targetAnn = parentWithAnn?.annotations?.find((annotation) => annotation.id === annotationId)
+    if (!targetAnn || targetAnn.status === "flattened") return
+
+    const previous = targetAnn.thread[targetAnn.thread.length - 1]
+    const assistantTurn: DisplayMessage = previous?.role === "assistant"
+      ? { ...previous, agentSteps: [...(previous.agentSteps ?? []), step] }
+      : {
+          id: nextId(),
+          role: "assistant",
+          content: "",
+          timestamp: Date.now(),
+          conversationId: parentWithAnn?.conversationId ?? "",
+          threadKind: "annotation",
+          agentSteps: [step],
+        }
+    set({
+      messages: messages.map((message) => {
+        if (!message.annotations?.some((annotation) => annotation.id === annotationId)) return message
+        return {
+          ...message,
+          annotations: message.annotations.map((annotation) => annotation.id === annotationId
+            ? { ...annotation, thread: previous?.role === "assistant" ? [...annotation.thread.slice(0, -1), assistantTurn] : [...annotation.thread, assistantTurn] }
+            : annotation),
         }
       }),
     })
@@ -595,7 +617,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
   },
 
-  askAnnotationQuestion: (args) => {
+  askAnnotationQuestion: async (args) => {
     // Step 1: locate the parent message. Without it we cannot anchor
     // the annotation; reject (return null) instead of throwing so the
     // popover can no-op rather than crash the trigger path. The
@@ -616,63 +638,92 @@ export const useChatStore = create<ChatState>((set, get) => ({
       args.snippet,
       args.range,
     )
+    if (!annotationId) {
+      console.warn("[annotation] createAnnotation returned null; aborting dispatch")
+      return null
+    }
 
     // Step 3: append the user's question to the annotation thread.
     // This is what makes the question visible in the annotation
     // inline / drawer immediately (the stream is async).
     get().appendAnnotationMessage(annotationId, "user", trimmedQuestion)
 
-    // Step 4: dispatch the agent turn. We fire-and-forget the promise
-    // because the stream is async; the existing listener mounted by
-    // `ChatSessionContent` (which filters by sessionId + runId) will
-    // catch every event for this run and route events whose payload
-    // carries `annotationId` into the annotation thread via
-    // `routeAgentEventToAnnotation`. If invoke rejects (e.g. backend
-    // down), we silently surface a console warning — the annotation
-    // thread is already created with the user's question, and the
-    // user can retry by typing another follow-up.
+    // Step 4: register a listener for this annotation run before invoking the
+    // backend. ChatSessionContent's listener is scoped to a different runId,
+    // so this dedicated listener owns routing and cleanup for the annotation.
     const state = get()
-    const sessionId = state.activeConversationId
+    const sessionId = state.activeConversationId ?? "default"
     const runId = `ui-ann-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    void invoke<string>("agent_start_turn_stream", {
-      projectId: "current",
-      request: {
-        message: trimmedQuestion,
-        sessionId,
-        runId,
-        mode: state.agentMode,
-        retrievalMode: state.retrievalMode,
-        stream: true,
-        tools: {
-          wiki: true,
-          web: state.useWebSearch,
-          anytxt: state.useAnyTxtSearch,
-        },
-        topK: state.agentMode === "deep" ? 8 : 5,
-        includeContent: state.agentMode === "deep",
-        history: [],
-        historyExplicit: true,
-        skills: [],
-        contextFiles: [],
-        wikiWriteMode: "confirm",
-        skillMode: "auto",
-        approvedShellCommands: [],
-        allowUnlimitedIterations: false,
-        annotation: {
+    const { processAnnotationEvent } = await import("@/lib/chat-annotation-stream")
+    let unlisten: UnlistenFn | null = null
+    const stopListening = () => {
+      const current = unlisten
+      unlisten = null
+      current?.()
+    }
+
+    try {
+      unlisten = await listen<BackendAgentEventPayload>("agent-event", (event) => {
+        const result = processAnnotationEvent(
+          event.payload,
           annotationId,
-          parentMessageId: parent.id,
-          parentMessageContent: parent.content,
-          snippet: args.snippet,
-          thread: [],
-          status: "open",
+          runId,
+          sessionId,
+        )
+        if (result.kind === "done") {
+          stopListening()
+        } else if (result.kind === "error") {
+          console.warn("[annotation] stream error:", result.error)
+          stopListening()
+        }
+      })
+    } catch (err) {
+      console.warn("[annotation] listener registration failed:", err)
+      return annotationId
+    }
+
+    try {
+      await invoke<string>("agent_start_turn_stream", {
+        projectId: "current",
+        request: {
+          message: trimmedQuestion,
+          sessionId,
+          runId,
+          mode: state.agentMode,
+          retrievalMode: state.retrievalMode,
+          stream: true,
+          tools: {
+            wiki: true,
+            web: state.useWebSearch,
+            anytxt: state.useAnyTxtSearch,
+          },
+          topK: state.agentMode === "deep" ? 8 : 5,
+          includeContent: state.agentMode === "deep",
+          history: [],
+          historyExplicit: true,
+          skills: [],
+          contextFiles: [],
+          wikiWriteMode: "confirm",
+          skillMode: "auto",
+          approvedShellCommands: [],
+          allowUnlimitedIterations: false,
+          annotation: {
+            annotationId,
+            parentMessageId: parent.id,
+            parentMessageContent: parent.content,
+            snippet: args.snippet,
+            thread: [],
+            status: "open",
+          },
         },
-      },
-    }).catch((err: unknown) => {
+      })
+    } catch (err) {
       // Non-fatal: the annotation row + user question are already
       // persisted. The user can retry by submitting a follow-up.
       // The console warn keeps it discoverable for support triage.
       console.warn("[chat-store] askAnnotationQuestion invoke failed:", err)
-    })
+      stopListening()
+    }
 
     return annotationId
   },
